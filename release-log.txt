@@ -1,5 +1,21 @@
+-- Oozie 3.2.1 (not released)
+
+OOZIE-867 update version of branch-2 to 3.2.1-incubating-SNAPSHOT (tucu)
+
 -- Oozie 3.2.0 release
 
+OOZIE-947 Forward porting OOZIE-733 to branch 3.2.0 (Mona via virag)
+OOZIE-852 remove pipes binaries from the source (tucu)
+OOZIE-851 demo workflow example does not enable sharelib for pig and streaming (tucu)
+OOZIE-850 apache-rat report should be a single global report file (tucu)
+OOZIE-849 set version in branch-3.2 to 3.2.0-incubating (tucu)
+OOZIE-852 remove pipes binaries from the source (tucu)
+OOZIE-851 demo workflow example does not enable sharelib for pig and streaming (tucu)
+OOZIE-850 apache-rat report should be a single global report file (tucu)
+OOZIE-847 Example directory has few files without license text(Mohammad)
+OOZIE-845 Delete 0 size files from repository(Mohammad)
+OOZIE-833 Add Hadoop proxyuser related settings to quick start guide.(Virag via Mohammad)
+OOZIE-832 Rename readme.txt file to README.txt and update contents(Mohammad)
 OOZIE-827 StatusTransitService fails to run if a stale reference to coord job is present (virag via tucu)
 OOZIE-815 Remove select * from queries related to coord action (Virag via Mohammad)
 OOZIE-826 TestCoordKillXCommand's testCoordKillXCommandUniqueness testcase is failing after interrupt changes(virag via Mohammad)
@@ -229,10 +245,10 @@ GH-0073 Suspend a coordinator bundle.
 GH-0072 Resume a coordinator bundle.
 GH-0065 Kill a coordinator bundle.
 GH-0074 Variable definition at coordinator bundle level.
-GH-0098 XCommand Code refactoring. 
+GH-0098 XCommand Code refactoring.
 GH-0099 JPA command refactor.
 GH-0077 Reprocessing of coordinator jobs.
-GH-0078 Option to rerun from failed node. 
+GH-0078 Option to rerun from failed node.
 GH-0075 Provide access to date list.
 GH-0077 Reprocess a complete coordinator bundle.
 GH-0110 Redesign Coordinator Job's status.

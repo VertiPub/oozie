@@ -47,7 +47,7 @@ Oozie Quick Start:
 Supported Hadoop Versions:
 ----------------------------
 
-This version of Oozie was primarily tested against Hadoop 0.20.205.x. Other earlier version (0.20.x) should work as well. However, it was not tested against 0.23+ yet.
+This version of Oozie was primarily tested against Hadoop 0.20.205.x. This will not work on earlier versions of Hadoop such as 0.20.x. and 0.21.
 
 --------------------------------------
 
