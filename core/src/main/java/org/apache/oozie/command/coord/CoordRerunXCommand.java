@@ -19,18 +19,15 @@ package org.apache.oozie.command.coord;
 
 import java.io.IOException;
 import java.io.StringReader;
-import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.CoordinatorActionInfo;
 import org.apache.oozie.CoordinatorJobBean;
 import org.apache.oozie.ErrorCode;
+import org.apache.oozie.SLAEventBean;
 import org.apache.oozie.XException;
 import org.apache.oozie.action.ActionExecutorException;
 import org.apache.oozie.action.hadoop.FsActionExecutor;
@@ -45,15 +42,11 @@ import org.apache.oozie.command.RerunTransitionXCommand;
 import org.apache.oozie.command.bundle.BundleStatusUpdateXCommand;
 import org.apache.oozie.coord.CoordELFunctions;
 import org.apache.oozie.coord.CoordUtils;
-import org.apache.oozie.executor.jpa.CoordActionGetJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordJobGetActionForNominalTimeJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordJobGetActionsForDatesJPAExecutor;
+import org.apache.oozie.executor.jpa.BulkUpdateInsertJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordJobUpdateJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
-import org.apache.oozie.util.DateUtils;
 import org.apache.oozie.util.InstrumentUtils;
 import org.apache.oozie.util.LogUtils;
 import org.apache.oozie.util.ParamChecker;
@@ -192,7 +185,7 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
         }
         catch (IOException ioe) {
             LOG.warn("Configuration parse error. read from DB :" + coordJob.getConf(), ioe);
-            throw new CommandException(ErrorCode.E1005, ioe);
+            throw new CommandException(ErrorCode.E1005, ioe.getMessage(), ioe);
         }
         String jobXml = coordJob.getJobXml();
         Element eJob = XmlUtils.parseXml(jobXml);
@@ -224,7 +217,7 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
         coordAction.setExternalStatus("");
         coordAction.setRerunTime(new Date());
         coordAction.setLastModifiedTime(new Date());
-        jpaService.execute(new org.apache.oozie.executor.jpa.CoordActionUpdateJPAExecutor(coordAction));
+        updateList.add(coordAction);
         writeActionRegistration(coordAction.getActionXml(), coordAction, coordJob.getUser(), coordJob.getGroup());
     }
 
@@ -241,8 +234,11 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
             throws Exception {
         Element eAction = XmlUtils.parseXml(actionXml);
         Element eSla = eAction.getChild("action", eAction.getNamespace()).getChild("info", eAction.getNamespace("sla"));
-        SLADbOperations.writeSlaRegistrationEvent(eSla, actionBean.getId(), SlaAppType.COORDINATOR_ACTION, user, group,
-                LOG);
+        SLAEventBean slaEvent = SLADbOperations.createSlaRegistrationEvent(eSla, actionBean.getId(),
+                SlaAppType.COORDINATOR_ACTION, user, group, LOG);
+        if(slaEvent != null) {
+            insertList.add(slaEvent);
+        }
     }
 
     /* (non-Javadoc)
@@ -285,9 +281,15 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
      */
     @Override
     protected void verifyPrecondition() throws CommandException, PreconditionException {
+        BundleStatusUpdateXCommand bundleStatusUpdate = new BundleStatusUpdateXCommand(coordJob, coordJob.getStatus());
         if (coordJob.getStatus() == CoordinatorJob.Status.KILLED
                 || coordJob.getStatus() == CoordinatorJob.Status.FAILED) {
             LOG.info("CoordRerunXCommand is not able to run, job status=" + coordJob.getStatus() + ", jobid=" + jobId);
+            // Call the parent so the pending flag is reset and state transition
+            // of bundle can happen
+            if (coordJob.getBundleId() != null) {
+                bundleStatusUpdate.call();
+            }
             throw new CommandException(ErrorCode.E1018,
                     "coordinator job is killed or failed so all actions are not eligible to rerun!");
         }
@@ -295,6 +297,11 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
         // no actioins have been created for PREP job
         if (coordJob.getStatus() == CoordinatorJob.Status.PREP) {
             LOG.info("CoordRerunXCommand is not able to run, job status=" + coordJob.getStatus() + ", jobid=" + jobId);
+            // Call the parent so the pending flag is reset and state transition
+            // of bundle can happen
+            if (coordJob.getBundleId() != null) {
+                bundleStatusUpdate.call();
+            }
             throw new CommandException(ErrorCode.E1018,
                     "coordinator job is PREP so no actions are materialized to rerun!");
         }
@@ -342,11 +349,11 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
         }
         catch (JDOMException jex) {
             isError = true;
-            throw new CommandException(ErrorCode.E0700, jex);
+            throw new CommandException(ErrorCode.E0700, jex.getMessage(), jex);
         }
         catch (Exception ex) {
             isError = true;
-            throw new CommandException(ErrorCode.E1018, ex);
+            throw new CommandException(ErrorCode.E1018, ex.getMessage(), ex);
         }
         finally{
             if(isError){
@@ -374,22 +381,32 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
     }
 
     @Override
-    public void updateJob() throws CommandException {
-        try {
-            // rerun a paused coordinator job will keep job status at paused and pending at previous pending
-            if (getPrevStatus()!= null && getPrevStatus().equals(Job.Status.PAUSED)) {
-                coordJob.setStatus(Job.Status.PAUSED);
-                if (prevPending) {
-                    coordJob.setPending();
-                } else {
-                    coordJob.resetPending();
-                }
+    public void updateJob() {
+        if (getPrevStatus()!= null){
+            Job.Status coordJobStatus = getPrevStatus();
+            if(coordJobStatus.equals(Job.Status.PAUSED) || coordJobStatus.equals(Job.Status.PAUSEDWITHERROR)) {
+                coordJob.setStatus(coordJobStatus);
             }
-
-            jpaService.execute(new CoordJobUpdateJPAExecutor(coordJob));
+            if (prevPending) {
+                coordJob.setPending();
+            } else {
+                coordJob.resetPending();
+            }
         }
-        catch (JPAExecutorException je) {
-            throw new CommandException(je);
+
+        updateList.add(coordJob);
+    }
+
+    /* (non-Javadoc)
+     * @see org.apache.oozie.command.RerunTransitionXCommand#performWrites()
+     */
+    @Override
+    public void performWrites() throws CommandException {
+        try {
+            jpaService.execute(new BulkUpdateInsertJPAExecutor(updateList, insertList));
+        }
+        catch (JPAExecutorException e) {
+            throw new CommandException(e);
         }
     }
 
@@ -404,7 +421,16 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
     @Override
     public final void transitToNext() {
         prevStatus = coordJob.getStatus();
-        coordJob.setStatus(Job.Status.RUNNING);
+        if (prevStatus == CoordinatorJob.Status.SUCCEEDED || prevStatus == CoordinatorJob.Status.PAUSED
+                || prevStatus == CoordinatorJob.Status.SUSPENDED || prevStatus == CoordinatorJob.Status.RUNNING) {
+            coordJob.setStatus(Job.Status.RUNNING);
+        }
+        else {
+            // Check for backward compatibility for Oozie versions (3.2 and before)
+            // when RUNNINGWITHERROR, SUSPENDEDWITHERROR and
+            // PAUSEDWITHERROR is not supported
+            coordJob.setStatus(StatusUtils.getStatusIfBackwardSupportTrue(CoordinatorJob.Status.RUNNINGWITHERROR));
+        }
         // used for backward support of coordinator 0.1 schema
         coordJob.setStatus(StatusUtils.getStatusForCoordRerun(coordJob, prevStatus));
         coordJob.setPending();

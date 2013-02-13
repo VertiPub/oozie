@@ -39,6 +39,7 @@ import java.util.Collections;
 import java.util.List;
 
 import junit.framework.Assert;
+import org.apache.oozie.workflow.lite.StartNodeDef;
 
 public class TestLiteWorkflowAppService extends XTestCase {
 
@@ -137,7 +138,9 @@ public class TestLiteWorkflowAppService extends XTestCase {
         catch (Exception ex) {
             //nop
         }
-        services.destroy();
+        finally {
+            services.destroy();
+        }
     }
 
     public void testSchema() throws Exception {
@@ -266,8 +269,8 @@ public class TestLiteWorkflowAppService extends XTestCase {
             LiteWorkflowApp app = (LiteWorkflowApp) wps.parseDef(jobConf, "authToken");
             assertNotNull(app);
             assertEquals("test-wf", app.getName());
-            assertNotNull(app.getNode("::start::"));
-            assertEquals("a", app.getNode("::start::").getTransitions().get(0));
+            assertNotNull(app.getNode(StartNodeDef.START));
+            assertEquals("a", app.getNode(StartNodeDef.START).getTransitions().get(0));
             assertEquals("b", app.getNode("a").getTransitions().get(0));
             assertEquals("c", app.getNode("a").getTransitions().get(1));
             assertEquals("c", app.getNode("a").getTransitions().get(2));
@@ -327,8 +330,8 @@ public class TestLiteWorkflowAppService extends XTestCase {
             assertEquals(2, protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST).length);
             String f1 = protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[0];
             String f2 = protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[1];
-            String ref1 = getTestCaseDir() + "/lib/reduceutil.so";
-            String ref2 = getTestCaseDir() + "/lib/maputil.jar";
+            String ref1 = "file://" + getTestCaseDir() + "/lib/reduceutil.so";
+            String ref2 = "file://" + getTestCaseDir() + "/lib/maputil.jar";
             Assert.assertTrue(f1.equals(ref1) || f1.equals(ref2));
             Assert.assertTrue(f2.equals(ref1) || f2.equals(ref2));
             Assert.assertTrue(!f1.equals(f2));
@@ -372,9 +375,9 @@ public class TestLiteWorkflowAppService extends XTestCase {
             found.add(protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[1]);
             found.add(protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[2]);
             List<String> expected = new ArrayList<String>();
-            expected.add(getTestCaseDir() + "/lib/reduceutil.so");
-            expected.add(getTestCaseDir() + "/lib/maputil.jar");
-            expected.add(getTestCaseDir() + "/libx/maputilx.jar");
+            expected.add("file://" + getTestCaseDir() + "/lib/reduceutil.so");
+            expected.add("file://" + getTestCaseDir() + "/lib/maputil.jar");
+            expected.add("file://" + getTestCaseDir() + "/libx/maputilx.jar");
             Collections.sort(found);
             Collections.sort(expected);
             assertEquals(expected, found);
@@ -434,12 +437,12 @@ public class TestLiteWorkflowAppService extends XTestCase {
             found.add(protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[4]);
             found.add(protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[5]);
             List<String> expected = new ArrayList<String>();
-            expected.add(getTestCaseDir() + "/lib/reduceutil.so");
-            expected.add(getTestCaseDir() + "/lib/maputil.jar");
-            expected.add(getTestCaseDir() + "/libx/maputil_x.jar");
-            expected.add(getTestCaseDir() + "/liby/maputil_y1.jar");
-            expected.add(getTestCaseDir() + "/liby/maputil_y2.jar");
-            expected.add(getTestCaseDir() + "/libz/maputil_z.jar");
+            expected.add("file://" + getTestCaseDir() + "/lib/reduceutil.so");
+            expected.add("file://" + getTestCaseDir() + "/lib/maputil.jar");
+            expected.add("file://" + getTestCaseDir() + "/libx/maputil_x.jar");
+            expected.add("file://" + getTestCaseDir() + "/liby/maputil_y1.jar");
+            expected.add("file://" + getTestCaseDir() + "/liby/maputil_y2.jar");
+            expected.add("file://" + getTestCaseDir() + "/libz/maputil_z.jar");
             Collections.sort(found);
             Collections.sort(expected);
             assertEquals(expected, found);
@@ -449,10 +452,9 @@ public class TestLiteWorkflowAppService extends XTestCase {
         }
     }
 
-    public void testCreateprotoConfWithSubWorkflow_Case1_ParentWorkflowContainingLibs() throws Exception {
-        // When parent workflow has an non-empty lib directory,
-        // APP_LIB_PATH_LIST should contain libraries from both parent and
-        // subworkflow (child)
+    public void testCreateprotoConfWithSubWorkflow_CheckSubworkflowLibInClasspath() throws Exception {
+        // When subworkflow has non-empty lib directory, APP_LIB_PATH_LIST for
+        // subworkflow should maintain its corresponding libraries in path
         Services services = new Services();
         try {
             services.init();
@@ -476,61 +478,11 @@ public class TestLiteWorkflowAppService extends XTestCase {
             Configuration protoConf = wps.createProtoActionConf(jobConf, "authToken", true);
             assertEquals(getTestUser(), protoConf.get(OozieClient.USER_NAME));
 
-            assertEquals(3, protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST).length);
-            String f1 = protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[0];
-            String f2 = protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[1];
-            String f3 = protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[2];
-            String ref1 = "parentdependency1.jar";
-            String ref2 = getTestCaseDir() + "/lib/childdependency1.jar";
-            String ref3 = getTestCaseDir() + "/lib/childdependency2.so";
-            List<String> expected = new ArrayList<String>();
-            expected.add(ref1);
-            expected.add(ref2);
-            expected.add(ref3);
-            List<String> found = new ArrayList<String>();
-            found.add(f1);
-            found.add(f2);
-            found.add(f3);
-            Collections.sort(found);
-            Collections.sort(expected);
-            assertEquals(expected, found);
-        }
-        finally {
-            services.destroy();
-        }
-    }
-
-    public void testCreateprotoConfWithSubWorkflow_Case2_ParentWorkflowWithoutLibs() throws Exception {
-        // When parent workflow has an empty (or missing) lib directory,
-        // APP_LIB_PATH_LIST should contain libraries from only the subworkflow
-        // (child)
-        Services services = new Services();
-        try {
-            services.init();
-            Reader reader = IOUtils.getResourceAsReader("wf-schema-valid.xml", -1);
-            Writer writer = new FileWriter(getTestCaseDir() + "/workflow.xml");
-            IOUtils.copyCharStream(reader, writer);
-
-            createTestCaseSubDir("lib");
-            writer = new FileWriter(getTestCaseDir() + "/lib/childdependency1.jar");
-            writer.write("bla bla");
-            writer.close();
-            writer = new FileWriter(getTestCaseDir() + "/lib/childdependency2.so");
-            writer.write("bla bla");
-            writer.close();
-            WorkflowAppService wps = Services.get().get(WorkflowAppService.class);
-            Configuration jobConf = new XConfiguration();
-            jobConf.set(OozieClient.APP_PATH, "file://" + getTestCaseDir() + File.separator + "workflow.xml");
-            jobConf.set(OozieClient.USER_NAME, getTestUser());
-
-            Configuration protoConf = wps.createProtoActionConf(jobConf, "authToken", true);
-            assertEquals(getTestUser(), protoConf.get(OozieClient.USER_NAME));
-
             assertEquals(2, protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST).length);
             String f1 = protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[0];
             String f2 = protoConf.getStrings(WorkflowAppService.APP_LIB_PATH_LIST)[1];
-            String ref1 = getTestCaseDir() + "/lib/childdependency1.jar";
-            String ref2 = getTestCaseDir() + "/lib/childdependency2.so";
+            String ref1 = "file://" + getTestCaseDir() + "/lib/childdependency1.jar";
+            String ref2 = "file://" + getTestCaseDir() + "/lib/childdependency2.so";
             List<String> expected = new ArrayList<String>();
             expected.add(ref1);
             expected.add(ref2);

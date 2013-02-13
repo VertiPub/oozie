@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,6 +21,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.client.WorkflowJob;
 import org.apache.oozie.client.SLAEvent.SlaAppType;
 import org.apache.oozie.client.SLAEvent.Status;
+import org.apache.oozie.client.rest.JsonBean;
+import org.apache.oozie.SLAEventBean;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
 import org.apache.oozie.ErrorCode;
@@ -29,12 +31,10 @@ import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
 import org.apache.oozie.command.coord.CoordActionUpdateXCommand;
 import org.apache.oozie.command.wf.ActionXCommand.ActionExecutorContext;
+import org.apache.oozie.executor.jpa.BulkUpdateInsertJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.executor.jpa.WorkflowActionGetJPAExecutor;
-import org.apache.oozie.executor.jpa.WorkflowActionInsertJPAExecutor;
-import org.apache.oozie.executor.jpa.WorkflowActionUpdateJPAExecutor;
 import org.apache.oozie.executor.jpa.WorkflowJobGetJPAExecutor;
-import org.apache.oozie.executor.jpa.WorkflowJobUpdateJPAExecutor;
 import org.apache.oozie.service.ELService;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.SchemaService;
@@ -56,6 +56,7 @@ import org.jdom.Element;
 import org.jdom.Namespace;
 
 import java.io.StringReader;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -69,6 +70,9 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
     private String actionId;
     private WorkflowJobBean wfJob;
     private WorkflowActionBean wfAction;
+    private List<JsonBean> updateList = new ArrayList<JsonBean>();
+    private List<JsonBean> insertList = new ArrayList<JsonBean>();
+
 
     public SignalXCommand(String name, int priority, String jobId) {
         super(name, name, priority);
@@ -142,9 +146,13 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                 wfJob.setStartTime(new Date());
                 wfJob.setWorkflowInstance(workflowInstance);
                 // 1. Add SLA status event for WF-JOB with status STARTED
+                SLAEventBean slaEvent = SLADbXOperations.createStatusEvent(wfJob.getSlaXml(), jobId,
+                        Status.STARTED, SlaAppType.WORKFLOW_JOB);
+                if(slaEvent != null) {
+                    insertList.add(slaEvent);
+                }
                 // 2. Add SLA registration events for all WF_ACTIONS
-                SLADbXOperations.writeStausEvent(wfJob.getSlaXml(), jobId, Status.STARTED, SlaAppType.WORKFLOW_JOB);
-                writeSLARegistrationForAllActions(workflowInstance.getApp().getDefinition(), wfJob.getUser(), wfJob
+                createSLARegistrationForAllActions(workflowInstance.getApp().getDefinition(), wfJob.getUser(), wfJob
                         .getGroup(), wfJob.getConf());
                 queue(new NotificationXCommand(wfJob));
             }
@@ -170,12 +178,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                 wfAction.setTransition(workflowInstance.getTransition(wfAction.getName()));
                 queue(new NotificationXCommand(wfJob, wfAction));
             }
-            try {
-                jpaService.execute(new WorkflowActionUpdateJPAExecutor(wfAction));
-            }
-            catch (JPAExecutorException je) {
-                throw new CommandException(je);
-            }
+            updateList.add(wfAction);
         }
 
         if (completed) {
@@ -187,7 +190,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
 
                     actionToKill.setPending();
                     actionToKill.setStatus(WorkflowActionBean.Status.KILLED);
-                    jpaService.execute(new WorkflowActionUpdateJPAExecutor(actionToKill));
+                    updateList.add(actionToKill);
                     queue(new ActionKillXCommand(actionToKill.getId(), actionToKill.getType()));
                 }
 
@@ -197,9 +200,12 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                     actionToFail.resetPending();
                     actionToFail.setStatus(WorkflowActionBean.Status.FAILED);
                     queue(new NotificationXCommand(wfJob, actionToFail));
-                    SLADbXOperations.writeStausEvent(wfAction.getSlaXml(), wfAction.getId(), Status.FAILED,
-                            SlaAppType.WORKFLOW_ACTION);
-                    jpaService.execute(new WorkflowActionUpdateJPAExecutor(actionToFail));
+                    SLAEventBean slaEvent = SLADbXOperations.createStatusEvent(wfAction.getSlaXml(), wfAction.getId(),
+                            Status.FAILED, SlaAppType.WORKFLOW_ACTION);
+                    if(slaEvent != null) {
+                        insertList.add(slaEvent);
+                    }
+                    updateList.add(actionToFail);
                 }
             }
             catch (JPAExecutorException je) {
@@ -223,7 +229,11 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                 default: // TODO SUSPENDED
                     break;
             }
-            SLADbXOperations.writeStausEvent(wfJob.getSlaXml(), jobId, slaStatus, SlaAppType.WORKFLOW_JOB);
+            SLAEventBean slaEvent = SLADbXOperations.createStatusEvent(wfJob.getSlaXml(), jobId,
+                    slaStatus, SlaAppType.WORKFLOW_JOB);
+            if(slaEvent != null) {
+                insertList.add(slaEvent);
+            }
             queue(new NotificationXCommand(wfJob));
             if (wfJob.getStatus() == WorkflowJob.Status.SUCCEEDED) {
                 InstrumentUtils.incrJobCounter(INSTR_SUCCEEDED_JOBS_COUNTER_NAME, 1, getInstrumentation());
@@ -248,10 +258,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                         else {
                             wfAction.setErrorInfo(ErrorCode.E0729.toString(), actionConf);
                         }
-                        jpaService.execute(new WorkflowActionUpdateJPAExecutor(wfAction));
-                    }
-                    catch (JPAExecutorException je) {
-                        throw new CommandException(je);
+                        updateList.add(wfAction);
                     }
                     catch (Exception ex) {
                         LOG.warn("Exception in SignalXCommand ", ex.getMessage(), ex);
@@ -276,7 +283,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                         oldAction = jpaService.execute(new WorkflowActionGetJPAExecutor(newAction.getId()));
 
                         oldAction.setPending();
-                        jpaService.execute(new WorkflowActionUpdateJPAExecutor(oldAction));
+                        updateList.add(oldAction);
 
                         queue(new SignalXCommand(jobId, oldAction.getId()));
                     }
@@ -285,7 +292,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                         String actionSlaXml = getActionSLAXml(newAction.getName(), workflowInstance.getApp()
                                 .getDefinition(), wfJob.getConf());
                         newAction.setSlaXml(actionSlaXml);
-                        jpaService.execute(new WorkflowActionInsertJPAExecutor(newAction));
+                        insertList.add(newAction);
                         LOG.debug("SignalXCommand: Name: "+ newAction.getName() + ", Id: " +newAction.getId() + ", Authcode:" + newAction.getCred());
                         queue(new ActionStartXCommand(newAction.getId(), newAction.getType()));
                     }
@@ -297,7 +304,10 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
         }
 
         try {
-            jpaService.execute(new WorkflowJobUpdateJPAExecutor(wfJob));
+            wfJob.setLastModifiedTime(new Date());
+            updateList.add(wfJob);
+            // call JPAExecutor to do the bulk writes
+            jpaService.execute(new BulkUpdateInsertJPAExecutor(updateList, insertList));
         }
         catch (JPAExecutorException je) {
             throw new CommandException(je);
@@ -356,7 +366,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
     }
 
     @SuppressWarnings("unchecked")
-    private void writeSLARegistrationForAllActions(String wfXml, String user, String group, String strConf)
+    private void createSLARegistrationForAllActions(String wfXml, String user, String group, String strConf)
             throws CommandException {
         try {
             Element eWfJob = XmlUtils.parseXml(wfXml);
@@ -368,12 +378,16 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                     eSla = XmlUtils.parseXml(slaXml);
                     String actionId = Services.get().get(UUIDService.class).generateChildId(jobId,
                             action.getAttributeValue("name") + "");
-                    SLADbXOperations.writeSlaRegistrationEvent(eSla, actionId, SlaAppType.WORKFLOW_ACTION, user, group);
+                    SLAEventBean slaEvent = SLADbXOperations.createSlaRegistrationEvent(eSla, actionId,
+                            SlaAppType.WORKFLOW_ACTION, user, group);
+                    if(slaEvent != null) {
+                        insertList.add(slaEvent);
+                    }
                 }
             }
         }
         catch (Exception e) {
-            throw new CommandException(ErrorCode.E1007, "workflow:Actions " + jobId, e);
+            throw new CommandException(ErrorCode.E1007, "workflow:Actions " + jobId, e.getMessage(), e);
         }
 
     }

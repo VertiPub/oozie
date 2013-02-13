@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,6 +17,7 @@
  */
 package org.apache.oozie.command.bundle;
 
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
@@ -29,20 +30,21 @@ import org.apache.oozie.ErrorCode;
 import org.apache.oozie.XException;
 import org.apache.oozie.client.Job;
 import org.apache.oozie.client.OozieClient;
+import org.apache.oozie.client.rest.JsonBean;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
 import org.apache.oozie.command.XCommand;
 import org.apache.oozie.command.coord.CoordChangeXCommand;
-import org.apache.oozie.executor.jpa.BundleActionUpdateJPAExecutor;
+import org.apache.oozie.executor.jpa.BulkUpdateInsertJPAExecutor;
 import org.apache.oozie.executor.jpa.BundleActionsGetJPAExecutor;
 import org.apache.oozie.executor.jpa.BundleJobGetJPAExecutor;
-import org.apache.oozie.executor.jpa.BundleJobUpdateJPAExecutor;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.util.DateUtils;
 import org.apache.oozie.util.JobUtils;
 import org.apache.oozie.util.LogUtils;
 import org.apache.oozie.util.ParamChecker;
+import org.apache.oozie.util.StatusUtils;
 
 public class BundleJobChangeXCommand extends XCommand<Void> {
     private String jobId;
@@ -54,6 +56,7 @@ public class BundleJobChangeXCommand extends XCommand<Void> {
     private Date newEndTime = null;
     boolean isChangePauseTime = false;
     boolean isChangeEndTime = false;
+    private List<JsonBean> updateList = new ArrayList<JsonBean>();
 
     private static final Set<String> ALLOWED_CHANGE_OPTIONS = new HashSet<String>();
     static {
@@ -128,7 +131,7 @@ public class BundleJobChangeXCommand extends XCommand<Void> {
             String value = map.get(OozieClient.CHANGE_VALUE_PAUSETIME);
             if (!value.equals(""))   {
                 try {
-                    newPauseTime = DateUtils.parseDateUTC(value);
+                    newPauseTime = DateUtils.parseDateOozieTZ(value);
                 }
                 catch (Exception ex) {
                     throw new CommandException(ErrorCode.E1317, value, "is not a valid date");
@@ -141,7 +144,7 @@ public class BundleJobChangeXCommand extends XCommand<Void> {
             String value = map.get(OozieClient.CHANGE_VALUE_ENDTIME);
             if (!value.equals(""))   {
                 try {
-                    newEndTime = DateUtils.parseDateUTC(value);
+                    newEndTime = DateUtils.parseDateOozieTZ(value);
                 }
                 catch (Exception ex) {
                     throw new CommandException(ErrorCode.E1317, value, "is not a valid date");
@@ -164,7 +167,12 @@ public class BundleJobChangeXCommand extends XCommand<Void> {
                 }
                 else if (isChangeEndTime) {
                     bundleJob.setEndTime(newEndTime);
-                    bundleJob.setStatus(Job.Status.RUNNING);
+                    if (bundleJob.getStatus() == Job.Status.SUCCEEDED) {
+                        bundleJob.setStatus(Job.Status.RUNNING);
+                    }
+                    if (bundleJob.getStatus() == Job.Status.DONEWITHERROR || bundleJob.getStatus() == Job.Status.FAILED) {
+                        bundleJob.setStatus(StatusUtils.getStatusIfBackwardSupportTrue(Job.Status.RUNNINGWITHERROR));
+                    }
                 }
                 for (BundleActionBean action : this.bundleActions) {
                     // queue coord change commands;
@@ -173,10 +181,11 @@ public class BundleJobChangeXCommand extends XCommand<Void> {
                         LOG.info("Queuing CoordChangeXCommand coord job = " + action.getCoordId() + " to change "
                                 + changeValue);
                         action.setPending(action.getPending() + 1);
-                        jpaService.execute(new BundleActionUpdateJPAExecutor(action));
+                        updateList.add(action);
                     }
                 }
-                jpaService.execute(new BundleJobUpdateJPAExecutor(bundleJob));
+                updateList.add(bundleJob);
+                jpaService.execute(new BulkUpdateInsertJPAExecutor(updateList, null));
             }
             return null;
         }

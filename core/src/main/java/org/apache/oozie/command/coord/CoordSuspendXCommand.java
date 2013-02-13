@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,10 +31,9 @@ import org.apache.oozie.command.PreconditionException;
 import org.apache.oozie.command.SuspendTransitionXCommand;
 import org.apache.oozie.command.bundle.BundleStatusUpdateXCommand;
 import org.apache.oozie.command.wf.SuspendXCommand;
-import org.apache.oozie.executor.jpa.CoordActionUpdateStatusJPAExecutor;
+import org.apache.oozie.executor.jpa.BulkUpdateInsertForCoordActionStatusJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetActionsRunningJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordJobUpdateJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
@@ -92,7 +91,7 @@ public class CoordSuspendXCommand extends SuspendTransitionXCommand {
             }
         }
         catch (Exception ex) {
-            throw new CommandException(ErrorCode.E0603, ex);
+            throw new CommandException(ErrorCode.E0603, ex.getMessage(), ex);
         }
         LogUtils.setLogInfo(this.coordJob, logInfo);
     }
@@ -150,12 +149,7 @@ public class CoordSuspendXCommand extends SuspendTransitionXCommand {
                 coordJob.resetPending();
                 LOG.debug("Exception happened, fail coordinator job id = " + jobId + ", status = "
                         + coordJob.getStatus());
-                try {
-                    jpaService.execute(new CoordJobUpdateJPAExecutor(coordJob));
-                }
-                catch (JPAExecutorException je) {
-                    LOG.error("Failed to update coordinator job : " + jobId, je);
-                }
+                updateList.add(coordJob);
             }
         }
     }
@@ -176,29 +170,32 @@ public class CoordSuspendXCommand extends SuspendTransitionXCommand {
      * @see org.apache.oozie.command.TransitionXCommand#updateJob()
      */
     @Override
-    public void updateJob() throws CommandException {
+    public void updateJob() {
         InstrumentUtils.incrJobCounter(getName(), 1, getInstrumentation());
         coordJob.setLastModifiedTime(new Date());
         coordJob.setSuspendedTime(new Date());
         LOG.debug("Suspend coordinator job id = " + jobId + ", status = " + coordJob.getStatus() + ", pending = " + coordJob.isPending());
+        updateList.add(coordJob);
+    }
+
+    /* (non-Javadoc)
+     * @see org.apache.oozie.command.SuspendTransitionXCommand#performWrites()
+     */
+    @Override
+    public void performWrites() throws CommandException {
         try {
-            jpaService.execute(new CoordJobUpdateJPAExecutor(coordJob));
+            jpaService.execute(new BulkUpdateInsertForCoordActionStatusJPAExecutor(updateList, null));
         }
-        catch (JPAExecutorException e) {
-            throw new CommandException(e);
+        catch (JPAExecutorException jex) {
+            throw new CommandException(jex);
         }
     }
 
-    private void updateCoordAction(CoordinatorActionBean action) throws CommandException {
+    private void updateCoordAction(CoordinatorActionBean action) {
         action.setStatus(CoordinatorActionBean.Status.SUSPENDED);
         action.incrementAndGetPending();
         action.setLastModifiedTime(new Date());
-        try {
-            jpaService.execute(new CoordActionUpdateStatusJPAExecutor(action));
-        }
-        catch (JPAExecutorException e) {
-            throw new CommandException(e);
-        }
+        updateList.add(action);
     }
 
     /* (non-Javadoc)
@@ -225,6 +222,15 @@ public class CoordSuspendXCommand extends SuspendTransitionXCommand {
         }
         else if (coordJob.getStatus() == Job.Status.RUNNING) {
             coordJob.setStatus(Job.Status.SUSPENDED);
+        }
+        else if (coordJob.getStatus() == Job.Status.RUNNINGWITHERROR) {
+            coordJob.setStatus(Job.Status.SUSPENDEDWITHERROR);
+        }
+        else if (coordJob.getStatus() == Job.Status.PAUSED) {
+            coordJob.setStatus(Job.Status.SUSPENDED);
+        }
+        else if (coordJob.getStatus() == Job.Status.PREPPAUSED) {
+            coordJob.setStatus(Job.Status.PREPSUSPENDED);
         }
         coordJob.setPending();
     }

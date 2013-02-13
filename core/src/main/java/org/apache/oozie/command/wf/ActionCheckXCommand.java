@@ -18,22 +18,28 @@
 package org.apache.oozie.command.wf;
 
 import java.sql.Timestamp;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
+
 import org.apache.oozie.ErrorCode;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
 import org.apache.oozie.XException;
 import org.apache.oozie.action.ActionExecutor;
 import org.apache.oozie.action.ActionExecutorException;
+import org.apache.oozie.client.WorkflowAction;
 import org.apache.oozie.client.WorkflowJob;
 import org.apache.oozie.client.WorkflowAction.Status;
+import org.apache.oozie.client.rest.JsonBean;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
+import org.apache.oozie.executor.jpa.BulkUpdateInsertJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.executor.jpa.WorkflowActionGetJPAExecutor;
 import org.apache.oozie.executor.jpa.WorkflowActionUpdateJPAExecutor;
 import org.apache.oozie.executor.jpa.WorkflowJobGetJPAExecutor;
-import org.apache.oozie.executor.jpa.WorkflowJobUpdateJPAExecutor;
+import org.apache.oozie.service.ActionCheckerService;
 import org.apache.oozie.service.ActionService;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
@@ -57,6 +63,7 @@ public class ActionCheckXCommand extends ActionXCommand<Void> {
     private WorkflowActionBean wfAction = null;
     private JPAService jpaService = null;
     private ActionExecutor executor = null;
+    private List<JsonBean> updateList = new ArrayList<JsonBean>();
 
     public ActionCheckXCommand(String actionId) {
         this(actionId, -1);
@@ -150,9 +157,16 @@ public class ActionCheckXCommand extends ActionXCommand<Void> {
     protected Void execute() throws CommandException {
         LOG.debug("STARTED ActionCheckXCommand for wf actionId=" + actionId + " priority =" + getPriority());
 
+        long retryInterval = Services.get().getConf().getLong(ActionCheckerService.CONF_ACTION_CHECK_INTERVAL, executor
+                .getRetryInterval());
+        executor.setRetryInterval(retryInterval);
+
         ActionExecutorContext context = null;
         try {
             boolean isRetry = false;
+            if (wfAction.getRetries() > 0) {
+                isRetry = true;
+            }
             boolean isUserRetry = false;
             context = new ActionXCommand.ActionExecutorContext(wfJob, wfAction, isRetry, isUserRetry);
             incrActionCounter(wfAction.getType(), 1);
@@ -170,17 +184,15 @@ public class ActionCheckXCommand extends ActionXCommand<Void> {
                     wfAction.setErrorInfo(EXEC_DATA_MISSING,
                             "Execution Complete, but Execution Data Missing from Action");
                     failJob(context);
-                    wfAction.setLastCheckTime(new Date());
-                    jpaService.execute(new WorkflowActionUpdateJPAExecutor(wfAction));
-                    jpaService.execute(new WorkflowJobUpdateJPAExecutor(wfJob));
-                    return null;
+                } else {
+                    wfAction.setPending();
+                    queue(new ActionEndXCommand(wfAction.getId(), wfAction.getType()));
                 }
-                wfAction.setPending();
-                queue(new ActionEndXCommand(wfAction.getId(), wfAction.getType()));
             }
             wfAction.setLastCheckTime(new Date());
-            jpaService.execute(new WorkflowActionUpdateJPAExecutor(wfAction));
-            jpaService.execute(new WorkflowJobUpdateJPAExecutor(wfJob));
+            updateList.add(wfAction);
+            wfJob.setLastModifiedTime(new Date());
+            updateList.add(wfJob);
         }
         catch (ActionExecutorException ex) {
             LOG.warn("Exception while executing check(). Error Code [{0}], Message[{1}]", ex.getErrorCode(), ex
@@ -195,19 +207,28 @@ public class ActionCheckXCommand extends ActionXCommand<Void> {
                 case ERROR:
                     handleUserRetry(wfAction);
                     break;
+                case TRANSIENT:                 // retry N times, then suspend workflow
+                    if (!handleTransient(context, executor, WorkflowAction.Status.RUNNING)) {
+                        handleNonTransient(context, executor, WorkflowAction.Status.START_MANUAL);
+                        wfAction.setPendingAge(new Date());
+                        wfAction.setRetries(0);
+                        wfAction.setStartTime(null);
+                    }
+                    break;
             }
             wfAction.setLastCheckTime(new Date());
+            updateList = new ArrayList<JsonBean>();
+            updateList.add(wfAction);
+            wfJob.setLastModifiedTime(new Date());
+            updateList.add(wfJob);
+        }
+        finally {
             try {
-                jpaService.execute(new WorkflowActionUpdateJPAExecutor(wfAction));
-                jpaService.execute(new WorkflowJobUpdateJPAExecutor(wfJob));
+                jpaService.execute(new BulkUpdateInsertJPAExecutor(updateList, null));
             }
             catch (JPAExecutorException e) {
                 throw new CommandException(e);
             }
-            return null;
-        }
-        catch (JPAExecutorException e) {
-            throw new CommandException(e);
         }
 
         LOG.debug("ENDED ActionCheckXCommand for wf actionId=" + actionId + ", jobId=" + jobId);
@@ -223,4 +244,9 @@ public class ActionCheckXCommand extends ActionXCommand<Void> {
             InstrumentUtils.incrJobCounter(INSTR_FAILED_JOBS_COUNTER, 1, getInstrumentation());
         }
     }
+
+    protected long getRetryInterval() {
+        return (executor != null) ? executor.getRetryInterval() : ActionExecutor.RETRY_INTERVAL;
+    }
+
 }

@@ -17,11 +17,14 @@
  */
 package org.apache.oozie.command.coord;
 
+import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.Map.Entry;
+import java.util.Set;
 
 import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.CoordinatorJobBean;
@@ -30,13 +33,15 @@ import org.apache.oozie.XException;
 import org.apache.oozie.client.CoordinatorJob;
 import org.apache.oozie.client.Job;
 import org.apache.oozie.client.OozieClient;
+import org.apache.oozie.client.rest.JsonBean;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
 import org.apache.oozie.command.bundle.BundleStatusUpdateXCommand;
-import org.apache.oozie.executor.jpa.CoordActionRemoveJPAExecutor;
+import org.apache.oozie.coord.TimeUnit;
+import org.apache.oozie.executor.jpa.BulkUpdateDeleteJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordActionGetJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetActionByActionNumberJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordJobUpdateJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
@@ -44,6 +49,7 @@ import org.apache.oozie.util.DateUtils;
 import org.apache.oozie.util.JobUtils;
 import org.apache.oozie.util.LogUtils;
 import org.apache.oozie.util.ParamChecker;
+import org.apache.oozie.util.StatusUtils;
 
 public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
     private final String jobId;
@@ -55,6 +61,8 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
     private CoordinatorJobBean coordJob;
     private JPAService jpaService = null;
     private Job.Status prevStatus;
+    private List<JsonBean> updateList = new ArrayList<JsonBean>();
+    private List<JsonBean> deleteList = new ArrayList<JsonBean>();
 
     private static final Set<String> ALLOWED_CHANGE_OPTIONS = new HashSet<String>();
     static {
@@ -108,7 +116,7 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
         if (map.containsKey(OozieClient.CHANGE_VALUE_ENDTIME)) {
             String value = map.get(OozieClient.CHANGE_VALUE_ENDTIME);
             try {
-                newEndTime = DateUtils.parseDateUTC(value);
+                newEndTime = DateUtils.parseDateOozieTZ(value);
             }
             catch (Exception ex) {
                 throw new CommandException(ErrorCode.E1015, value, "must be a valid date");
@@ -132,13 +140,28 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
             }
             else {
                 try {
-                    newPauseTime = DateUtils.parseDateUTC(value);
+                    newPauseTime = DateUtils.parseDateOozieTZ(value);
                 }
                 catch (Exception ex) {
                     throw new CommandException(ErrorCode.E1015, value, "must be a valid date");
                 }
             }
         }
+    }
+
+    /**
+     * Returns the actual last action time(one instance before coordJob.lastActionTime)
+     * @return Date - last action time if coordJob.getLastActionTime() is not null, null otherwise
+     */
+    private Date getLastActionTime() {
+        if(coordJob.getLastActionTime() == null)
+            return null;
+
+        Calendar d = Calendar.getInstance(DateUtils.getTimeZone(coordJob.getTimeZone()));
+        d.setTime(coordJob.getLastActionTime());
+        TimeUnit timeUnit = TimeUnit.valueOf(coordJob.getTimeUnitStr());
+        d.add(timeUnit.getCalendarUnit(), -coordJob.getFrequency());
+        return d.getTime();
     }
 
     /**
@@ -157,12 +180,11 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
         }
 
         // New endTime cannot be before coordinator job's last action time.
-        Date lastActionTime = coordJob.getLastActionTime();
+        Date lastActionTime = getLastActionTime();
         if (lastActionTime != null) {
-            Date d = new Date(lastActionTime.getTime() - coordJob.getFrequency() * 60 * 1000);
-            if (!newEndTime.after(d)) {
+            if (!newEndTime.after(lastActionTime)) {
                 throw new CommandException(ErrorCode.E1015, newEndTime,
-                        "must be after coordinator job's last action time [" + d + "]");
+                        "must be after coordinator job's last action time [" + lastActionTime + "]");
             }
         }
     }
@@ -195,14 +217,17 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
         Date lastActionTime = coordJob.getLastActionTime();
         if (lastActionTime != null) {
             // d is the real last action time.
-            Date d = new Date(lastActionTime.getTime() - coordJob.getFrequency() * 60 * 1000);
+            Calendar d = Calendar.getInstance(DateUtils.getTimeZone(coordJob.getTimeZone()));
+            d.setTime(getLastActionTime());
+            TimeUnit timeUnit = TimeUnit.valueOf(coordJob.getTimeUnitStr());
+
             int lastActionNumber = coordJob.getLastActionNumber();
 
             boolean hasChanged = false;
             while (true) {
-                if (!newPauseTime.after(d)) {
-                    deleteAction(coordJob.getId(), lastActionNumber);
-                    d = new Date(d.getTime() - coordJob.getFrequency() * 60 * 1000);
+                if (!newPauseTime.after(d.getTime())) {
+                    deleteAction(lastActionNumber);
+                    d.add(timeUnit.getCalendarUnit(), -coordJob.getFrequency());
                     lastActionNumber = lastActionNumber - 1;
 
                     hasChanged = true;
@@ -214,7 +239,8 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
 
             if (hasChanged == true) {
                 coordJob.setLastActionNumber(lastActionNumber);
-                Date d1 = new Date(d.getTime() + coordJob.getFrequency() * 60 * 1000);
+                d.add(timeUnit.getCalendarUnit(), coordJob.getFrequency());
+                Date d1 = d.getTime();
                 coordJob.setLastActionTime(d1);
                 coordJob.setNextMaterializedTime(d1);
                 coordJob.resetDoneMaterialization();
@@ -223,17 +249,16 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
     }
 
     /**
-     * Delete last action for a coordinator job
+     * Delete coordinator action
      *
-     * @param coordJob coordinator job
-     * @param lastActionNum last action number of the coordinator job
+     * @param actionNum coordinator action number
      */
-    private void deleteAction(String jobId, int lastActionNum) throws CommandException {
+    private void deleteAction(int actionNum) throws CommandException {
         try {
-            String coordActionId = jpaService.execute(new CoordJobGetActionByActionNumberJPAExecutor(jobId, lastActionNum));
-            jpaService.execute(new CoordActionRemoveJPAExecutor(coordActionId));
-        }
-        catch (JPAExecutorException e) {
+            String actionId = jpaService.execute(new CoordJobGetActionByActionNumberJPAExecutor(jobId, actionNum));
+            CoordinatorActionBean bean = jpaService.execute(new CoordActionGetJPAExecutor(actionId));
+            deleteList.add(bean);
+        } catch (JPAExecutorException e) {
             throw new CommandException(e);
         }
     }
@@ -272,14 +297,18 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
         try {
             if (newEndTime != null) {
                 coordJob.setEndTime(newEndTime);
-                if (coordJob.getStatus() == CoordinatorJob.Status.SUCCEEDED
-                        || coordJob.getStatus() == CoordinatorJob.Status.RUNNING
-                        || coordJob.getStatus() == CoordinatorJob.Status.DONEWITHERROR
-                        || coordJob.getStatus() == CoordinatorJob.Status.FAILED) {
+                if (coordJob.getStatus() == CoordinatorJob.Status.SUCCEEDED){
                     coordJob.setStatus(CoordinatorJob.Status.RUNNING);
-                    coordJob.setPending();
-                    coordJob.resetDoneMaterialization();
                 }
+                if (coordJob.getStatus() == CoordinatorJob.Status.DONEWITHERROR
+                        || coordJob.getStatus() == CoordinatorJob.Status.FAILED) {
+                    // Check for backward compatibility for Oozie versions (3.2 and before)
+                    // when RUNNINGWITHERROR, SUSPENDEDWITHERROR and
+                    // PAUSEDWITHERROR is not supported
+                    coordJob.setStatus(StatusUtils.getStatusIfBackwardSupportTrue(CoordinatorJob.Status.RUNNINGWITHERROR));
+                }
+                coordJob.setPending();
+                coordJob.resetDoneMaterialization();
             }
 
             if (newConcurrency != null) {
@@ -289,20 +318,37 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
             if (newPauseTime != null || resetPauseTime == true) {
                 this.coordJob.setPauseTime(newPauseTime);
                 if (oldPauseTime != null && newPauseTime != null) {
-                    if (oldPauseTime.before(newPauseTime) && this.coordJob.getStatus() == Job.Status.PAUSED) {
-                        this.coordJob.setStatus(Job.Status.RUNNING);
+                    if (oldPauseTime.before(newPauseTime)) {
+                        if (this.coordJob.getStatus() == Job.Status.PAUSED) {
+                            this.coordJob.setStatus(Job.Status.RUNNING);
+                        }
+                        else if (this.coordJob.getStatus() == Job.Status.PAUSEDWITHERROR) {
+                            this.coordJob.setStatus(Job.Status.RUNNINGWITHERROR);
+                        }
                     }
                 }
-                else if (oldPauseTime != null && newPauseTime == null && this.coordJob.getStatus() == Job.Status.PAUSED) {
-                    this.coordJob.setStatus(Job.Status.RUNNING);
+                else if (oldPauseTime != null && newPauseTime == null) {
+                    if (this.coordJob.getStatus() == Job.Status.PAUSED) {
+                        this.coordJob.setStatus(Job.Status.RUNNING);
+                    }
+                    else if (this.coordJob.getStatus() == Job.Status.PAUSEDWITHERROR) {
+                        this.coordJob.setStatus(Job.Status.RUNNINGWITHERROR);
+                    }
                 }
-
                 if (!resetPauseTime) {
                     processLookaheadActions(coordJob, newPauseTime);
                 }
             }
 
-            jpaService.execute(new CoordJobUpdateJPAExecutor(this.coordJob));
+            if (coordJob.getNextMaterializedTime() != null && coordJob.getEndTime().compareTo(coordJob.getNextMaterializedTime()) <= 0) {
+                LOG.info("[" + coordJob.getId() + "]: all actions have been materialized, job status = " + coordJob.getStatus()
+                        + ", set pending to true");
+                // set doneMaterialization to true when materialization is done
+                coordJob.setDoneMaterialization();
+            }
+
+            updateList.add(coordJob);
+            jpaService.execute(new BulkUpdateDeleteJPAExecutor(updateList, deleteList, false));
 
             return null;
         }

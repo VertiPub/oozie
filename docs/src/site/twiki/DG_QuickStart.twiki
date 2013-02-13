@@ -35,15 +35,38 @@ Expand the Oozie distribution =tar.gz=.
 
 Expand the Hadoop distribution =tar.gz= (as the Oozie Unix user).
 
+*NOTE:* Configure the Hadoop cluster with proxyuser for the Oozie process.
+
+The following two properties are required in Hadoop core-site.xml:
+
+<verbatim>
+  <!-- OOZIE -->
+  <property>
+    <name>hadoop.proxyuser.[OOZIE_SERVER_USER].hosts</name>
+    <value>[OOZIE_SERVER_HOSTNAME]</value>
+  </property>
+  <property>
+    <name>hadoop.proxyuser.[OOZIE_SERVER_USER].groups</name>
+    <value>[USER_GROUPS_THAT_ALLOW_IMPERSONATION]</value>
+  </property>
+</verbatim>
+
+Replace the capital letter sections with specific values and then restart Hadoop.
+
 Expand the Oozie hadooplibs =tar.gz= in the same location Oozie distribution =tar.gz= was expanded. A
 *hadooplibs/* directory will be created containing the Hadoop JARs for the versions of Hadoop that
 the Oozie distribution supports.
 
 The ExtJS library is optional (only required for the Oozie web-console to work)
 
-*IMPORTANT:* all Oozie server scripts (=oozie-setup.sh=, =oozie-start.sh=, =oozie-run.sh=
+*IMPORTANT:* all Oozie server scripts (=oozie-setup.sh=, =oozied.sh=, =oozie-start.sh=, =oozie-run.sh=
 and =oozie-stop.sh=) run only under the Unix user that owns the Oozie installation directory,
 if necessary use =sudo -u OOZIE_USER= when invoking the scripts.
+
+As of Oozie 3.4.0, use of =oozie-start.sh=, =oozie-run.sh=, and =oozie-stop.sh= has
+been deprecated and will print a warning. The =oozied.sh= script should be used
+instead; passing it =start=, =run=, or =stop= as an argument will perform the
+behaviors of =oozie-start.sh=, =oozie-run.sh=, and =oozie-stop.sh= respectively.
 
 Create a *libext/* directory in the directory where Oozie was expanded.
 
@@ -84,13 +107,13 @@ $
 Start Oozie as a daemon process run:
 
 <verbatim>
-$ bin/oozie-start.sh
+$ bin/oozied.sh start
 </verbatim>
 
 To start Oozie as a foreground process run:
 
 <verbatim>
-$ bin/oozie-run.sh
+$ bin/oozied.sh run
 </verbatim>
 
 Check the Oozie log file =logs/oozie.log= to ensure Oozie started properly.
@@ -128,6 +151,8 @@ $ hadoop fs -put share share
 
 *IMPORTANT:* This must be done using the Oozie Hadoop (HDFS) user. If a =share= directory already exists in HDFS,
 it must be deleted before copying it again.
+
+See the [[WorkflowFunctionalSpec#ShareLib][Workflow Functional Specification]] for more information about the Oozie ShareLib.
 
 [[index][::Go back to Oozie Documentation Index::]]
 

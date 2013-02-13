@@ -17,12 +17,9 @@
  */
 package org.apache.oozie.executor.jpa;
 
-import java.util.List;
-
 import javax.persistence.EntityManager;
 import javax.persistence.Query;
 
-import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.ErrorCode;
 import org.apache.oozie.util.ParamChecker;
 
@@ -61,7 +58,7 @@ public class CoordJobGetActionByActionNumberJPAExecutor implements JPAExecutor<S
             return actionId;
         }
         catch (Exception e) {
-            throw new JPAExecutorException(ErrorCode.E0603, e);
+            throw new JPAExecutorException(ErrorCode.E0603, e.getMessage(), e);
         }
     }
 }

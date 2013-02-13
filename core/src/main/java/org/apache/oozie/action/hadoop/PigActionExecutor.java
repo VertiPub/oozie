@@ -170,12 +170,20 @@ public class PigActionExecutor extends JavaActionExecutor {
         return stats;
     }
 
+    @Override
+    protected void setActionCompletionData(Context context, FileSystem fs) throws HadoopAccessorException, IOException,
+            URISyntaxException {
+        String data = getExternalChildIDs(context, fs);
+        context.setExternalChildIDs(data);
+    }
+
     private String getExternalChildIDs(Context context, FileSystem actionFs) throws IOException,
             HadoopAccessorException, URISyntaxException {
         Path actionOutput = LauncherMapper.getExternalChildIDsDataPath(context.getActionDir());
         String externalIDs = null;
         if (actionFs.exists(actionOutput)) {
             externalIDs = getDataFromPath(actionOutput, actionFs);
+            XLog.getLog(getClass()).info(XLog.STD, "Hadoop Jobs launched : [{0}]", externalIDs);
         }
         return externalIDs;
     }

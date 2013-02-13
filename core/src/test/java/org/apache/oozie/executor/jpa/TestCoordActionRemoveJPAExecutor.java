@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,6 +19,7 @@ package org.apache.oozie.executor.jpa;
 
 import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.CoordinatorJobBean;
+import org.apache.oozie.ErrorCode;
 import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.client.CoordinatorJob;
 import org.apache.oozie.local.LocalOozie;
@@ -35,12 +36,10 @@ public class TestCoordActionRemoveJPAExecutor extends XDataTestCase {
         services = new Services();
         services.init();
         cleanUpDBTables();
-        LocalOozie.start();
     }
 
     @Override
     protected void tearDown() throws Exception {
-        LocalOozie.stop();
         services.destroy();
         super.tearDown();
     }
@@ -49,7 +48,7 @@ public class TestCoordActionRemoveJPAExecutor extends XDataTestCase {
         int actionNum = 1;
         CoordinatorJobBean job = addRecordToCoordJobTable(CoordinatorJob.Status.RUNNING, false, false);
         CoordinatorActionBean action = addRecordToCoordActionTable(job.getId(), actionNum,
-                CoordinatorAction.Status.SUCCEEDED, "coord-action-get.xml", 0);
+                CoordinatorAction.Status.WAITING, "coord-action-get.xml", 0);
         _testCoordActionRemove(job.getId(), action.getId());
     }
 
@@ -69,4 +68,23 @@ public class TestCoordActionRemoveJPAExecutor extends XDataTestCase {
         }
     }
 
+    public void testRunningActionDelete() throws Exception {
+        CoordinatorJobBean job = addRecordToCoordJobTable(CoordinatorJob.Status.RUNNING, false, false);
+        CoordinatorActionBean action = addRecordToCoordActionTable(job.getId(), 1,
+                CoordinatorAction.Status.RUNNING, "coord-action-get.xml", 0);
+
+        JPAService jpaService = Services.get().get(JPAService.class);
+        assertNotNull(jpaService);
+        CoordActionRemoveJPAExecutor coordRmvCmd = new CoordActionRemoveJPAExecutor(action.getId());
+
+        try {
+            jpaService.execute(coordRmvCmd);
+            fail("Should have thrown JPAExecutorException");
+        } catch(JPAExecutorException e) {
+            System.out.println(e.getErrorCode());
+            e.printStackTrace();
+            if(e.getErrorCode() != ErrorCode.E1022)
+                fail("Error code should be E1022");
+        }
+    }
 }
