@@ -67,15 +67,16 @@
         <oozie.test.config.file>${oozie.test.default.config.file}</oozie.test.config.file>
 
         <hadoop.version>1.0.1</hadoop.version>
+        <hadoop.two.version>2.0.5-alpha</hadoop.two.version>
 
         <hadooplib.version>${hadoop.version}.oozie-${project.version}</hadooplib.version>
-        
+
         <clover.license>/home/jenkins/tools/clover/latest/lib/clover.license</clover.license>
         <!--
         This is required while we support a a pre 0.23 version of Hadoop which does not have
         the hadoop-auth artifact. After we phase-out pre 0.23 we can get rid of this property.
         -->
-        <hadoop.auth.version>2.0.2-alpha</hadoop.auth.version>
+        <hadoop.auth.version>${hadoop.two.version}</hadoop.auth.version>
 
          <!-- Sharelib component versions -->
          <hive.version>0.9.0</hive.version>
