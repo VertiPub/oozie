@@ -28,8 +28,8 @@
     <groupId>org.apache.oozie</groupId>
     <artifactId>oozie-hadoop</artifactId>
     <version>${hadooplib.version}</version>
-    <description>Apache Oozie Hadoop ${project.version}</description>
-    <name>Apache Oozie Hadoop ${project.version}</name>
+    <description>Apache Oozie Hadoop ${hadooplib.version}</description>
+    <name>Apache Oozie Hadoop ${hadooplib.version}</name>
     <packaging>jar</packaging>
 
     <dependencies>
