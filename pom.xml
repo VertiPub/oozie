@@ -499,12 +499,6 @@
                 <version>1.6.6</version>
             </dependency>
 
-            <dependency>
-                <groupId>org.apache.hive</groupId>
-                <artifactId>hive-builtins</artifactId>
-                <version>${hivebuiltins.version}</version>
-            </dependency>
-
            <dependency>
                 <groupId>org.apache.activemq</groupId>
                 <artifactId>activemq-client</artifactId>
@@ -1029,6 +1023,17 @@
             <modules>
                 <module>login</module>
             </modules>
+        </profile>
+        <profile>
+            <id>hive-10</id>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+            <dependency>
+                <groupId>org.apache.hive</groupId>
+                <artifactId>hive-builtins</artifactId>
+                <version>${hivebuiltins.version}</version>
+            </dependency>
         </profile>
     </profiles>
 </project>
