@@ -27,7 +27,7 @@
     </parent>
     <groupId>org.apache.oozie</groupId>
     <artifactId>oozie-hadoop-distcp</artifactId>
-    <version>${hadooplib.version}</version>
+    <version>${hadoop.version}.oozie-4.0.0</version>
     <description>Apache Oozie Hadoop Distcp ${project.version}</description>
     <name>Apache Oozie Hadoop Distcp ${project.version}</name>
     <packaging>jar</packaging>

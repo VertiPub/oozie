@@ -27,9 +27,9 @@
     </parent>
     <groupId>org.apache.oozie</groupId>
     <artifactId>oozie-hadoop</artifactId>
-    <version>${hadooplib.version}</version>
-    <description>Apache Oozie Hadoop ${hadooplib.version}</description>
-    <name>Apache Oozie Hadoop ${hadooplib.version}</name>
+    <version>${hadoop.version}.oozie-4.0.0<version>
+    <description>Apache Oozie Hadoop ${project.version}</description>
+    <name>Apache Oozie Hadoop ${project.version}</name>
     <packaging>jar</packaging>
 
     <dependencies>
