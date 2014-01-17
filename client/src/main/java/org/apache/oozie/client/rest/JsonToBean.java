@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,10 +21,14 @@ import org.apache.oozie.client.BulkResponse;
 import org.apache.oozie.client.BundleJob;
 import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.client.CoordinatorJob;
+import org.apache.oozie.client.JMSConnectionInfo;
+import org.apache.oozie.client.JMSConnectionInfoWrapper;
 import org.apache.oozie.client.WorkflowAction;
 import org.apache.oozie.client.WorkflowJob;
+import org.apache.oozie.AppType;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
+import org.json.simple.JSONValue;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -34,6 +38,8 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
 
 /**
  * JSON to bean converter for {@link WorkflowAction}, {@link WorkflowJob}, {@link CoordinatorAction}
@@ -41,6 +47,7 @@ import java.util.Map;
  * <p/>
  * It uses JDK dynamic proxy to create bean instances.
  */
+@SuppressWarnings("rawtypes")
 public class JsonToBean {
 
     private static class Property {
@@ -65,6 +72,7 @@ public class JsonToBean {
     private static final Map<String, Property> COORD_ACTION = new HashMap<String, Property>();
     private static final Map<String, Property> BUNDLE_JOB = new HashMap<String, Property>();
     private static final Map<String, Property> BULK_RESPONSE = new HashMap<String, Property>();
+    private static final Map<String, Property> JMS_CONNECTION_INFO = new HashMap<String, Property>();
 
     static {
         WF_ACTION.put("getId", new Property(JsonTags.WORKFLOW_ACTION_ID, String.class));
@@ -95,7 +103,7 @@ public class JsonToBean {
         WF_JOB.put("getStatus", new Property(JsonTags.WORKFLOW_STATUS, WorkflowJob.Status.class));
         WF_JOB.put("getLastModifiedTime", new Property(JsonTags.WORKFLOW_LAST_MOD_TIME, Date.class));
         WF_JOB.put("getCreatedTime", new Property(JsonTags.WORKFLOW_CREATED_TIME, Date.class));
-        WF_JOB.put("getStartTime", new Property(JsonTags.WORKFLOW_CREATED_TIME, Date.class));
+        WF_JOB.put("getStartTime", new Property(JsonTags.WORKFLOW_START_TIME, Date.class));
         WF_JOB.put("getEndTime", new Property(JsonTags.WORKFLOW_END_TIME, Date.class));
         WF_JOB.put("getUser", new Property(JsonTags.WORKFLOW_USER, String.class));
         WF_JOB.put("getGroup", new Property(JsonTags.WORKFLOW_GROUP, String.class));
@@ -119,6 +127,8 @@ public class JsonToBean {
                 .put("getLastModifiedTime", new Property(JsonTags.COORDINATOR_ACTION_LAST_MODIFIED_TIME, Date.class));
         COORD_ACTION
                 .put("getMissingDependencies", new Property(JsonTags.COORDINATOR_ACTION_MISSING_DEPS, String.class));
+        COORD_ACTION.put("getPushMissingDependencies", new Property(JsonTags.COORDINATOR_ACTION_PUSH_MISSING_DEPS,
+                String.class));
         COORD_ACTION.put("getExternalStatus", new Property(JsonTags.COORDINATOR_ACTION_EXTERNAL_STATUS, String.class));
         COORD_ACTION.put("getTrackerUri", new Property(JsonTags.COORDINATOR_ACTION_TRACKER_URI, String.class));
         COORD_ACTION.put("getConsoleUrl", new Property(JsonTags.COORDINATOR_ACTION_CONSOLE_URL, String.class));
@@ -133,7 +143,7 @@ public class JsonToBean {
         COORD_JOB.put("getStatus", new Property(JsonTags.COORDINATOR_JOB_STATUS, CoordinatorJob.Status.class));
         COORD_JOB.put("getExecutionOrder",
                       new Property(JsonTags.COORDINATOR_JOB_EXECUTIONPOLICY, CoordinatorJob.Execution.class));
-        COORD_JOB.put("getFrequency", new Property(JsonTags.COORDINATOR_JOB_FREQUENCY, Integer.TYPE));
+        COORD_JOB.put("getFrequency", new Property(JsonTags.COORDINATOR_JOB_FREQUENCY, String.class));
         COORD_JOB.put("getTimeUnit", new Property(JsonTags.COORDINATOR_JOB_TIMEUNIT, CoordinatorJob.Timeunit.class));
         COORD_JOB.put("getTimeZone", new Property(JsonTags.COORDINATOR_JOB_TIMEZONE, String.class));
         COORD_JOB.put("getConcurrency", new Property(JsonTags.COORDINATOR_JOB_CONCURRENCY, Integer.TYPE));
@@ -172,10 +182,13 @@ public class JsonToBean {
         BUNDLE_JOB.put("getCoordinators",new Property(JsonTags.BUNDLE_COORDINATOR_JOBS, CoordinatorJob.class, true));
         BUNDLE_JOB.put("toString", new Property(JsonTags.TO_STRING, String.class));
 
-        BULK_RESPONSE.put("getBundle", new Property(JsonTags.BULK_RESPONSE_BUNDLE, BundleJob.class, true));
-        BULK_RESPONSE.put("getCoordinator", new Property(JsonTags.BULK_RESPONSE_COORDINATOR, CoordinatorJob.class, true));
-        BULK_RESPONSE.put("getAction", new Property(JsonTags.BULK_RESPONSE_ACTION, CoordinatorAction.class, true));
+        BULK_RESPONSE.put("getBundle", new Property(JsonTags.BULK_RESPONSE_BUNDLE, BundleJob.class, false));
+        BULK_RESPONSE.put("getCoordinator", new Property(JsonTags.BULK_RESPONSE_COORDINATOR, CoordinatorJob.class, false));
+        BULK_RESPONSE.put("getAction", new Property(JsonTags.BULK_RESPONSE_ACTION, CoordinatorAction.class, false));
 
+        JMS_CONNECTION_INFO.put("getTopicPatternProperties", new Property(JsonTags.JMS_TOPIC_PATTERN, Properties.class));
+        JMS_CONNECTION_INFO.put("getJNDIProperties", new Property(JsonTags.JMS_JNDI_PROPERTIES, Properties.class));
+        JMS_CONNECTION_INFO.put("getTopicPrefix", new Property(JsonTags.JMS_TOPIC_PREFIX, String.class));
     }
 
     /**
@@ -224,7 +237,7 @@ public class JsonToBean {
         @SuppressWarnings("unchecked")
         private Object parseType(Class type, Object obj) {
             if (type == String.class) {
-                return obj;
+                return obj == null ? obj : obj.toString();
             }
             else if (type == Integer.TYPE) {
                 return (obj != null) ? new Integer(((Long) obj).intValue()) : new Integer(0);
@@ -240,6 +253,24 @@ public class JsonToBean {
             }
             else if (type == WorkflowAction.class) {
                 return createWorkflowAction((JSONObject) obj);
+            }
+            else if (type == Properties.class){
+                JSONObject jsonMap = (JSONObject)JSONValue.parse((String)obj);
+                Properties props = new Properties();
+                Set<Map.Entry> entrySet = jsonMap.entrySet();
+                for (Map.Entry jsonEntry: entrySet){
+                    props.put(jsonEntry.getKey(), jsonEntry.getValue());
+                }
+                return props;
+            }
+            else if (type == CoordinatorJob.class) {
+                return createCoordinatorJob((JSONObject) obj);
+            }
+            else if (type == CoordinatorAction.class) {
+                return createCoordinatorAction((JSONObject) obj);
+            }
+            else if (type == BundleJob.class) {
+                return createBundleJob((JSONObject) obj);
             }
             else {
                 throw new RuntimeException("Unsupported type : " + type.getSimpleName());
@@ -337,6 +368,36 @@ public class JsonToBean {
                                                        new JsonInvocationHandler(COORD_JOB, json));
     }
 
+
+    /**
+     * Creates a JMSInfo bean from a JSON object.
+     *
+     * @param json json object.
+     * @return a coordinator job bean populated with the JSON object values.
+     */
+    public static JMSConnectionInfo createJMSConnectionInfo(JSONObject json) {
+        final JMSConnectionInfoWrapper jmsInfo = (JMSConnectionInfoWrapper) Proxy.newProxyInstance(
+                JsonToBean.class.getClassLoader(), new Class[] { JMSConnectionInfoWrapper.class },
+                new JsonInvocationHandler(JMS_CONNECTION_INFO, json));
+
+        return new JMSConnectionInfo() {
+            @Override
+            public String getTopicPrefix() {
+                return jmsInfo.getTopicPrefix();
+            }
+
+            @Override
+            public String getTopicPattern(AppType appType) {
+                return (String)jmsInfo.getTopicPatternProperties().get(appType.name());
+            }
+
+            @Override
+            public Properties getJNDIProperties() {
+                return jmsInfo.getJNDIProperties();
+            }
+        };
+    }
+
     /**
      * Creates a list of coordinator job beans from a JSON array.
      *
@@ -378,6 +439,18 @@ public class JsonToBean {
     }
 
     /**
+     * Creates a Bulk response object from a JSON object.
+     *
+     * @param json json object.
+     * @return a Bulk response object populated with the JSON object values.
+     */
+    public static BulkResponse createBulkResponse(JSONObject json) {
+        return (BulkResponse) Proxy.newProxyInstance(JsonToBean.class.getClassLoader(),
+                                                    new Class[]{BulkResponse.class},
+                                                    new JsonInvocationHandler(BULK_RESPONSE, json));
+    }
+
+    /**
      * Creates a list of bulk response beans from a JSON array.
      *
      * @param json json array.
@@ -386,11 +459,9 @@ public class JsonToBean {
     public static List<BulkResponse> createBulkResponseList(JSONArray json) {
         List<BulkResponse> list = new ArrayList<BulkResponse>();
         for (Object obj : json) {
-            BulkResponse bulkObj = (BulkResponse) Proxy.newProxyInstance
-                    (JsonToBean.class.getClassLoader(), new Class[]{BulkResponse.class},
-                    new JsonInvocationHandler(BULK_RESPONSE, (JSONObject) obj));
-            list.add(bulkObj);
+            list.add(createBulkResponse((JSONObject) obj));
         }
         return list;
     }
+
 }

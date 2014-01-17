@@ -17,6 +17,7 @@
  */
 package org.apache.oozie.command.wf;
 
+import java.io.IOException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.client.WorkflowJob;
 import org.apache.oozie.client.SLAEvent.SlaAppType;
@@ -29,15 +30,17 @@ import org.apache.oozie.ErrorCode;
 import org.apache.oozie.XException;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
-import org.apache.oozie.command.coord.CoordActionUpdateXCommand;
 import org.apache.oozie.command.wf.ActionXCommand.ActionExecutorContext;
-import org.apache.oozie.executor.jpa.BulkUpdateInsertJPAExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.executor.jpa.WorkflowActionGetJPAExecutor;
+import org.apache.oozie.executor.jpa.WorkflowActionQueryExecutor.WorkflowActionQuery;
 import org.apache.oozie.executor.jpa.WorkflowJobGetJPAExecutor;
+import org.apache.oozie.executor.jpa.WorkflowJobQueryExecutor.WorkflowJobQuery;
 import org.apache.oozie.service.ELService;
+import org.apache.oozie.service.EventHandlerService;
 import org.apache.oozie.service.JPAService;
-import org.apache.oozie.service.SchemaService;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.service.UUIDService;
 import org.apache.oozie.service.WorkflowStoreService;
@@ -53,14 +56,14 @@ import org.apache.oozie.util.ParamChecker;
 import org.apache.oozie.util.XmlUtils;
 import org.apache.oozie.util.db.SLADbXOperations;
 import org.jdom.Element;
-import org.jdom.Namespace;
-
 import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import org.apache.oozie.client.OozieClient;
 
+@SuppressWarnings("deprecation")
 public class SignalXCommand extends WorkflowXCommand<Void> {
 
     protected static final String INSTR_SUCCEEDED_JOBS_COUNTER_NAME = "succeeded";
@@ -70,8 +73,11 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
     private String actionId;
     private WorkflowJobBean wfJob;
     private WorkflowActionBean wfAction;
-    private List<JsonBean> updateList = new ArrayList<JsonBean>();
+    private List<UpdateEntry> updateList = new ArrayList<UpdateEntry>();
     private List<JsonBean> insertList = new ArrayList<JsonBean>();
+    private boolean generateEvent = false;
+    private String wfJobErrorCode;
+    private String wfJobErrorMsg;
 
 
     public SignalXCommand(String name, int priority, String jobId) {
@@ -92,6 +98,11 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
     @Override
     public String getEntityKey() {
         return this.jobId;
+    }
+
+    @Override
+    public String getKey() {
+        return getName() + "_" + jobId + "_" + actionId;
     }
 
     @Override
@@ -145,6 +156,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                 wfJob.setStatus(WorkflowJob.Status.RUNNING);
                 wfJob.setStartTime(new Date());
                 wfJob.setWorkflowInstance(workflowInstance);
+                generateEvent = true;
                 // 1. Add SLA status event for WF-JOB with status STARTED
                 SLAEventBean slaEvent = SLADbXOperations.createStatusEvent(wfJob.getSlaXml(), jobId,
                         Status.STARTED, SlaAppType.WORKFLOW_JOB);
@@ -161,6 +173,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
             }
         }
         else {
+            WorkflowInstance.Status initialStatus = workflowInstance.getStatus();
             String skipVar = workflowInstance.getVar(wfAction.getName() + WorkflowInstance.NODE_VAR_SEPARATOR
                     + ReRunXCommand.TO_SKIP);
             if (skipVar != null) {
@@ -170,7 +183,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                 completed = workflowInstance.signal(wfAction.getExecutionPath(), wfAction.getSignalValue());
             }
             catch (WorkflowException e) {
-                throw new CommandException(e);
+                wfJob.setStatus(WorkflowJob.Status.valueOf(workflowInstance.getStatus().toString()));
             }
             wfJob.setWorkflowInstance(workflowInstance);
             wfAction.resetPending();
@@ -178,7 +191,12 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                 wfAction.setTransition(workflowInstance.getTransition(wfAction.getName()));
                 queue(new NotificationXCommand(wfJob, wfAction));
             }
-            updateList.add(wfAction);
+            updateList.add(new UpdateEntry<WorkflowActionQuery>(WorkflowActionQuery.UPDATE_ACTION_PENDING_TRANS,
+                    wfAction));
+            WorkflowInstance.Status endStatus = workflowInstance.getStatus();
+            if (endStatus != initialStatus) {
+                generateEvent = true;
+            }
         }
 
         if (completed) {
@@ -190,7 +208,8 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
 
                     actionToKill.setPending();
                     actionToKill.setStatus(WorkflowActionBean.Status.KILLED);
-                    updateList.add(actionToKill);
+                    updateList.add(new UpdateEntry<WorkflowActionQuery>(
+                            WorkflowActionQuery.UPDATE_ACTION_STATUS_PENDING, actionToKill));
                     queue(new ActionKillXCommand(actionToKill.getId(), actionToKill.getType()));
                 }
 
@@ -199,13 +218,18 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                             actionToFailId));
                     actionToFail.resetPending();
                     actionToFail.setStatus(WorkflowActionBean.Status.FAILED);
+                    if (wfJobErrorCode != null) {
+                        wfJobErrorCode = actionToFail.getErrorCode();
+                        wfJobErrorMsg = actionToFail.getErrorMessage();
+                    }
                     queue(new NotificationXCommand(wfJob, actionToFail));
                     SLAEventBean slaEvent = SLADbXOperations.createStatusEvent(wfAction.getSlaXml(), wfAction.getId(),
                             Status.FAILED, SlaAppType.WORKFLOW_ACTION);
                     if(slaEvent != null) {
                         insertList.add(slaEvent);
                     }
-                    updateList.add(actionToFail);
+                    updateList.add(new UpdateEntry<WorkflowActionQuery>(
+                            WorkflowActionQuery.UPDATE_ACTION_STATUS_PENDING, actionToFail));
                 }
             }
             catch (JPAExecutorException je) {
@@ -250,15 +274,18 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                     try {
                         String tmpNodeConf = nodeDef.getConf();
                         String actionConf = context.getELEvaluator().evaluate(tmpNodeConf, String.class);
-                        LOG.debug("Try to resolve KillNode message for jobid [{0}], actionId [{1}], before resolve [{2}], after resolve [{3}]",
-                                        jobId, actionId, tmpNodeConf, actionConf);
+                        LOG.debug(
+                                "Try to resolve KillNode message for jobid [{0}], actionId [{1}], before resolve [{2}], " +
+                                "after resolve [{3}]",
+                                jobId, actionId, tmpNodeConf, actionConf);
                         if (wfAction.getErrorCode() != null) {
                             wfAction.setErrorInfo(wfAction.getErrorCode(), actionConf);
                         }
                         else {
                             wfAction.setErrorInfo(ErrorCode.E0729.toString(), actionConf);
                         }
-                        updateList.add(wfAction);
+                        updateList.add(new UpdateEntry<WorkflowActionQuery>(
+                                WorkflowActionQuery.UPDATE_ACTION_PENDING_TRANS_ERROR, wfAction));
                     }
                     catch (Exception ex) {
                         LOG.warn("Exception in SignalXCommand ", ex.getMessage(), ex);
@@ -283,17 +310,27 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                         oldAction = jpaService.execute(new WorkflowActionGetJPAExecutor(newAction.getId()));
 
                         oldAction.setPending();
-                        updateList.add(oldAction);
+                        updateList.add(new UpdateEntry<WorkflowActionQuery>(WorkflowActionQuery.UPDATE_ACTION_PENDING, oldAction));
 
                         queue(new SignalXCommand(jobId, oldAction.getId()));
                     }
                     else {
+                        try {
+                            // Make sure that transition node for a forked action
+                            // is inserted only once
+                            jpaService.execute(new WorkflowActionGetJPAExecutor(newAction.getId()));
+                            continue;
+                        }
+                        catch (JPAExecutorException jee) {
+                        }
+                        checkForSuspendNode(newAction);
                         newAction.setPending();
                         String actionSlaXml = getActionSLAXml(newAction.getName(), workflowInstance.getApp()
                                 .getDefinition(), wfJob.getConf());
                         newAction.setSlaXml(actionSlaXml);
                         insertList.add(newAction);
-                        LOG.debug("SignalXCommand: Name: "+ newAction.getName() + ", Id: " +newAction.getId() + ", Authcode:" + newAction.getCred());
+                        LOG.debug("SignalXCommand: Name: " + newAction.getName() + ", Id: " + newAction.getId()
+                                + ", Authcode:" + newAction.getCred());
                         queue(new ActionStartXCommand(newAction.getId(), newAction.getType()));
                     }
                 }
@@ -305,9 +342,13 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
 
         try {
             wfJob.setLastModifiedTime(new Date());
-            updateList.add(wfJob);
+            updateList.add(new UpdateEntry<WorkflowJobQuery>(
+                    WorkflowJobQuery.UPDATE_WORKFLOW_STATUS_INSTANCE_MOD_START_END, wfJob));
             // call JPAExecutor to do the bulk writes
-            jpaService.execute(new BulkUpdateInsertJPAExecutor(updateList, insertList));
+            BatchQueryExecutor.getInstance().executeBatchInsertUpdateDelete(insertList, updateList, null);
+            if (generateEvent && EventHandlerService.isEnabled()) {
+                generateEvent(wfJob, wfJobErrorCode, wfJobErrorMsg);
+            }
         }
         catch (JPAExecutorException je) {
             throw new CommandException(je);
@@ -315,8 +356,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
         LOG.debug(
                 "Updated the workflow status to " + wfJob.getId() + "  status =" + wfJob.getStatusStr());
         if (wfJob.getStatus() != WorkflowJob.Status.RUNNING && wfJob.getStatus() != WorkflowJob.Status.SUSPENDED) {
-            // update coordinator action
-            new CoordActionUpdateXCommand(wfJob).call();    //Note: Called even if wf is not necessarily instantiated by coordinator
+            updateParentIfNecessary(wfJob);
             new WfEndXCommand(wfJob).call(); //To delete the WF temp dir
         }
         LOG.debug("ENDED SignalCommand for jobid=" + jobId + ", actionId=" + actionId);
@@ -340,7 +380,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
                 if (action.getAttributeValue("name").equals(actionName) == false) {
                     continue;
                 }
-                Element eSla = action.getChild("info", Namespace.getNamespace(SchemaService.SLA_NAME_SPACE_URI));
+                Element eSla = XmlUtils.getSLAElement(action);
                 if (eSla != null) {
                     slaXml = XmlUtils.prettyPrint(eSla).toString();
                     break;
@@ -372,7 +412,7 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
             Element eWfJob = XmlUtils.parseXml(wfXml);
             Configuration conf = new XConfiguration(new StringReader(strConf));
             for (Element action : (List<Element>) eWfJob.getChildren("action", eWfJob.getNamespace())) {
-                Element eSla = action.getChild("info", Namespace.getNamespace(SchemaService.SLA_NAME_SPACE_URI));
+                Element eSla = XmlUtils.getSLAElement(action);
                 if (eSla != null) {
                     String slaXml = resolveSla(eSla, conf);
                     eSla = XmlUtils.parseXml(slaXml);
@@ -390,6 +430,32 @@ public class SignalXCommand extends WorkflowXCommand<Void> {
             throw new CommandException(ErrorCode.E1007, "workflow:Actions " + jobId, e.getMessage(), e);
         }
 
+    }
+
+    private void checkForSuspendNode(WorkflowActionBean newAction) {
+        try {
+            XConfiguration wfjobConf = new XConfiguration(new StringReader(wfJob.getConf()));
+            String[] values = wfjobConf.getTrimmedStrings(OozieClient.OOZIE_SUSPEND_ON_NODES);
+            if (values != null) {
+                if (values.length == 1 && values[0].equals("*")) {
+                    LOG.info("Reached suspend node at [{0}], suspending workflow [{1}]", newAction.getName(), wfJob.getId());
+                    queue(new SuspendXCommand(jobId));
+                }
+                else {
+                    for (String suspendPoint : values) {
+                        if (suspendPoint.equals(newAction.getName())) {
+                            LOG.info("Reached suspend node at [{0}], suspending workflow [{1}]", newAction.getName(),
+                                    wfJob.getId());
+                            queue(new SuspendXCommand(jobId));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        catch (IOException ex) {
+            LOG.warn("Error reading " + OozieClient.OOZIE_SUSPEND_ON_NODES + ", ignoring [{0}]", ex.getMessage());
+        }
     }
 
 }

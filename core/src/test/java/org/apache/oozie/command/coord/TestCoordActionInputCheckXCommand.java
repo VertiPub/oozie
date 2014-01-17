@@ -36,7 +36,8 @@ import org.apache.oozie.coord.CoordELFunctions;
 import org.apache.oozie.executor.jpa.CoordActionGetForInputCheckJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordActionGetJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordActionInsertJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordActionUpdateForInputCheckJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor.CoordActionQuery;
 import org.apache.oozie.executor.jpa.CoordJobInsertJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.service.CallableQueueService;
@@ -49,6 +50,9 @@ import org.apache.oozie.util.DateUtils;
 import org.apache.oozie.util.IOUtils;
 import org.apache.oozie.util.XConfiguration;
 import org.apache.oozie.util.XLog;
+import org.apache.oozie.util.XmlUtils;
+import org.jdom.Element;
+import org.junit.Test;
 
 public class TestCoordActionInputCheckXCommand extends XDataTestCase {
     protected Services services;
@@ -150,10 +154,18 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         Date endTime = DateUtils.parseDateOozieTZ("2009-02-02T23:59" + TZ);
         CoordinatorJobBean job = addRecordToCoordJobTable(jobId, startTime, endTime);
         new CoordMaterializeTransitionXCommand(job.getId(), 3600).call();
-        createDir(getTestCaseDir() + "/2009/01/29/");
+        createDir(getTestCaseDir() + "/2009/02/05/");
         createDir(getTestCaseDir() + "/2009/01/15/");
         new CoordActionInputCheckXCommand(job.getId() + "@1", job.getId()).call();
-        checkCoordAction(job.getId() + "@1");
+        JPAService jpaService = Services.get().get(JPAService.class);
+        CoordinatorActionBean action = jpaService.execute(new CoordActionGetJPAExecutor(job.getId() + "@1"));
+        System.out.println("missingDeps " + action.getMissingDependencies() + " Xml " + action.getActionXml());
+        if (action.getMissingDependencies().indexOf("/2009/02/05/") >= 0) {
+            fail("directory should be resolved :" + action.getMissingDependencies());
+        }
+        if (action.getMissingDependencies().indexOf("/2009/01/15/") < 0) {
+            fail("directory should NOT be resolved :" + action.getMissingDependencies());
+        }
     }
 
     /**
@@ -168,8 +180,8 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         new CoordMaterializeTransitionXCommand(job.getId(), 3600).call();
 
         // providing some of the dataset dirs required as per coordinator
-        // specification - /2009/02/12, /2009/02/05, /2009/01/29, /2009/01/22
-        createDir(getTestCaseDir() + "/2009/02/12/");
+        // specification - /2009/02/19, /2009/02/12, /2009/02/05, /2009/01/29, /2009/01/22
+        createDir(getTestCaseDir() + "/2009/02/19/");
         createDir(getTestCaseDir() + "/2009/01/29/");
 
         new CoordActionInputCheckXCommand(job.getId() + "@1", job.getId()).call();
@@ -184,9 +196,9 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
 
         // Missing dependencies recorded by the coordinator action after input check
         String missDepsOrder = action.getMissingDependencies();
-        // Expected missing dependencies are /2009/02/05, /2009/01/29, and /2009/01/22.
+        // Expected missing dependencies are /2009/02/12, /2009/02/05, /2009/01/29, and /2009/01/22.
 
-        int index = missDepsOrder.indexOf("/2009/02/12");
+        int index = missDepsOrder.indexOf("/2009/02/19");
         if( index >= 0) {
             fail("Dependency should be available! current list: " + missDepsOrder);
         }
@@ -210,32 +222,24 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         CoordinatorJobBean job = addRecordToCoordJobTable(jobId, startTime, endTime, "latest");
         new CoordMaterializeTransitionXCommand(job.getId(), 3600).call();
 
-        CoordinatorActionBean action = null;
         JPAService jpaService = Services.get().get(JPAService.class);
-        try {
-            action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
-        }
-        catch (JPAExecutorException se) {
-            fail("Action ID " + job.getId() + "@1" + " was not stored properly in db");
-        }
+        CoordinatorActionBean action = jpaService
+                .execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertEquals(CoordCommandUtils.RESOLVED_UNRESOLVED_SEPARATOR + "${coord:latestRange(-3,0)}",
+                action.getMissingDependencies());
 
-        assertEquals(";${coord:latestRange(-3,0)}", action.getMissingDependencies());
-
+        // Update action creation time
         String actionXML = action.getActionXml();
         String actionCreationTime = "2009-02-15T01:00" + TZ;
         actionXML = actionXML.replaceAll("action-actual-time=\".*\">", "action-actual-time=\"" + actionCreationTime
                 + "\">");
         action.setActionXml(actionXML);
         action.setCreatedTime(DateUtils.parseDateOozieTZ(actionCreationTime));
-
-        try {
-            jpaService.execute(new CoordActionUpdateForInputCheckJPAExecutor(action));
-            action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
-            assertTrue(action.getActionXml().contains("action-actual-time=\"2009-02-15T01:00")) ;
-        }
-        catch (JPAExecutorException se) {
-            fail("Action ID " + job.getId() + "@1" + " was not stored properly in db");
-        }
+        CoordActionQueryExecutor.getInstance().executeUpdate(
+                CoordActionQueryExecutor.CoordActionQuery.UPDATE_COORD_ACTION_FOR_INPUTCHECK,
+                action);
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertTrue(action.getActionXml().contains("action-actual-time=\"2009-02-15T01:00")) ;
 
         // providing some of the dataset dirs required as per coordinator specification with holes
         // before and after action creation time
@@ -249,15 +253,89 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         new CoordActionInputCheckXCommand(job.getId() + "@1", job.getId()).call();
         //Sleep for sometime as it gets requeued with 10ms delay on failure to acquire write lock
         Thread.sleep(1000);
-        try {
-            action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
-        }
-        catch (JPAExecutorException se) {
-            fail("Action ID " + job.getId() + "@1" + " was not stored properly in db");
-        }
 
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
         actionXML = action.getActionXml();
         assertEquals("", action.getMissingDependencies());
+        // Datasets only before action creation/actual time should be picked up.
+        String resolvedList = "file://" + getTestCaseDir() + "/2009/02/12" + CoordELFunctions.INSTANCE_SEPARATOR
+                + "file://" + getTestCaseDir() + "/2009/02/05" + CoordELFunctions.INSTANCE_SEPARATOR
+                + "file://" + getTestCaseDir() + "/2009/01/22" + CoordELFunctions.INSTANCE_SEPARATOR
+                + "file://" + getTestCaseDir() + "/2009/01/08";
+        System.out.println("Expected: " + resolvedList);
+        System.out.println("Actual: " +  actionXML.substring(actionXML.indexOf("<uris>") + 6, actionXML.indexOf("</uris>")));
+        assertEquals(resolvedList, actionXML.substring(actionXML.indexOf("<uris>") + 6, actionXML.indexOf("</uris>")));
+    }
+
+    public void testActionInputCheckLatestActionCreationTimeWithPushDependency() throws Exception {
+        Services.get().getConf().setBoolean(CoordELFunctions.LATEST_EL_USE_CURRENT_TIME, false);
+
+        String jobId = "0000000-" + new Date().getTime() + "-TestCoordActionInputCheckXCommand-C";
+        Date startTime = DateUtils.parseDateOozieTZ("2009-02-15T23:59" + TZ);
+        Date endTime = DateUtils.parseDateOozieTZ("2009-02-16T23:59" + TZ);
+        CoordinatorJobBean job = addRecordToCoordJobTable(jobId, startTime, endTime, "latest");
+        new CoordMaterializeTransitionXCommand(job.getId(), 3600).call();
+
+        // Set push missing dependency
+        JPAService jpaService = Services.get().get(JPAService.class);
+        CoordinatorActionBean action = jpaService
+                .execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        final String pushMissingDependency = "file://" + getTestCaseDir() + "/2009/02/05";
+        action.setPushMissingDependencies(pushMissingDependency);
+        CoordActionQueryExecutor.getInstance().executeUpdate(
+                CoordActionQueryExecutor.CoordActionQuery.UPDATE_COORD_ACTION_FOR_PUSH_INPUTCHECK,
+                action);
+
+        // Update action creation time
+        String actionXML = action.getActionXml();
+        String actionCreationTime = "2009-02-15T01:00" + TZ;
+        actionXML = actionXML.replaceAll("action-actual-time=\".*\">", "action-actual-time=\"" + actionCreationTime
+                + "\">");
+        action.setActionXml(actionXML);
+        action.setCreatedTime(DateUtils.parseDateOozieTZ(actionCreationTime));
+        CoordActionQueryExecutor.getInstance().executeUpdate(
+                CoordActionQueryExecutor.CoordActionQuery.UPDATE_COORD_ACTION_FOR_INPUTCHECK,
+                action);
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertTrue(action.getActionXml().contains("action-actual-time=\"2009-02-15T01:00")) ;
+
+        new CoordActionInputCheckXCommand(job.getId() + "@1", job.getId()).call();
+        new CoordPushDependencyCheckXCommand(job.getId() + "@1").call();
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertEquals(CoordCommandUtils.RESOLVED_UNRESOLVED_SEPARATOR + "${coord:latestRange(-3,0)}",
+                action.getMissingDependencies());
+        assertEquals(pushMissingDependency, action.getPushMissingDependencies());
+
+        // providing some of the dataset dirs required as per coordinator specification with holes
+        // before and after action creation time
+        createDir(getTestCaseDir() + "/2009/03/05/");
+        createDir(getTestCaseDir() + "/2009/02/19/");
+        createDir(getTestCaseDir() + "/2009/02/12/");
+        createDir(getTestCaseDir() + "/2009/01/22/");
+        createDir(getTestCaseDir() + "/2009/01/08/");
+        createDir(getTestCaseDir() + "/2009/01/01/");
+
+        // Run input check after making latest available
+        new CoordActionInputCheckXCommand(job.getId() + "@1", job.getId()).call();
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertEquals(CoordCommandUtils.RESOLVED_UNRESOLVED_SEPARATOR + "${coord:latestRange(-3,0)}",
+                action.getMissingDependencies());
+        assertEquals(pushMissingDependency, action.getPushMissingDependencies());
+
+        // Run input check after making push dependencies available
+        createDir(getTestCaseDir() + "/2009/02/05");
+        new CoordPushDependencyCheckXCommand(job.getId() + "@1").call();
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertEquals("", action.getPushMissingDependencies());
+        checkCoordAction(job.getId() + "@1", CoordCommandUtils.RESOLVED_UNRESOLVED_SEPARATOR
+                + "${coord:latestRange(-3,0)}", CoordinatorAction.Status.WAITING);
+        new CoordActionInputCheckXCommand(job.getId() + "@1", job.getId()).call();
+        //Sleep for sometime as it gets requeued with 10ms delay on failure to acquire write lock
+        Thread.sleep(1000);
+
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertEquals("", action.getMissingDependencies());
+        actionXML = action.getActionXml();
         // Datasets only before action creation/actual time should be picked up.
         String resolvedList = "file://" + getTestCaseDir() + "/2009/02/12" + CoordELFunctions.INSTANCE_SEPARATOR
                 + "file://" + getTestCaseDir() + "/2009/02/05" + CoordELFunctions.INSTANCE_SEPARATOR
@@ -277,32 +355,24 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         CoordinatorJobBean job = addRecordToCoordJobTable(jobId, startTime, endTime, "latest");
         new CoordMaterializeTransitionXCommand(job.getId(), 3600).call();
 
-        CoordinatorActionBean action = null;
         JPAService jpaService = Services.get().get(JPAService.class);
-        try {
-            action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
-        }
-        catch (JPAExecutorException se) {
-            fail("Action ID " + job.getId() + "@1" + " was not stored properly in db");
-        }
+        CoordinatorActionBean action = jpaService
+                .execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertEquals(CoordCommandUtils.RESOLVED_UNRESOLVED_SEPARATOR + "${coord:latestRange(-3,0)}",
+                action.getMissingDependencies());
 
-        assertEquals(";${coord:latestRange(-3,0)}", action.getMissingDependencies());
-
+        // Update action creation time
         String actionXML = action.getActionXml();
         String actionCreationTime = "2009-02-15T01:00" + TZ;
         actionXML = actionXML.replaceAll("action-actual-time=\".*\">", "action-actual-time=\"" + actionCreationTime
                 + "\">");
         action.setActionXml(actionXML);
         action.setCreatedTime(DateUtils.parseDateOozieTZ(actionCreationTime));
-
-        try {
-            jpaService.execute(new CoordActionUpdateForInputCheckJPAExecutor(action));
-            action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
-            assertTrue(action.getActionXml().contains("action-actual-time=\"2009-02-15T01:00")) ;
-        }
-        catch (JPAExecutorException se) {
-            fail("Action ID " + job.getId() + "@1" + " was not stored properly in db");
-        }
+        CoordActionQueryExecutor.getInstance().executeUpdate(
+                CoordActionQueryExecutor.CoordActionQuery.UPDATE_COORD_ACTION_FOR_INPUTCHECK,
+                action);
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertTrue(action.getActionXml().contains("action-actual-time=\"2009-02-15T01:00")) ;
 
         // providing some of the dataset dirs required as per coordinator
         // specification with holes
@@ -317,13 +387,8 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         new CoordActionInputCheckXCommand(job.getId() + "@1", job.getId()).call();
         //Sleep for sometime as it gets requeued with 10ms delay on failure to acquire write lock
         Thread.sleep(1000);
-        try {
-            action = jpaService.execute(new CoordActionGetJPAExecutor(job.getId() + "@1"));
-        }
-        catch (JPAExecutorException se) {
-            fail("Action ID " + job.getId() + "@1" + " was not stored properly in db");
-        }
 
+        action = jpaService.execute(new CoordActionGetJPAExecutor(job.getId() + "@1"));
         actionXML = action.getActionXml();
         assertEquals("", action.getMissingDependencies());
         // Datasets should be picked up based on current time and not action creation/actual time.
@@ -331,6 +396,85 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
                 + "file://" + getTestCaseDir() + "/2009/02/19" + CoordELFunctions.INSTANCE_SEPARATOR
                 + "file://" + getTestCaseDir() + "/2009/02/12" + CoordELFunctions.INSTANCE_SEPARATOR
                 + "file://" + getTestCaseDir() + "/2009/02/05";
+        assertEquals(resolvedList, actionXML.substring(actionXML.indexOf("<uris>") + 6, actionXML.indexOf("</uris>")));
+    }
+
+    public void testActionInputCheckLatestCurrentTimeWithPushDependency() throws Exception {
+        Services.get().getConf().setBoolean(CoordELFunctions.LATEST_EL_USE_CURRENT_TIME, true);
+
+        String jobId = "0000000-" + new Date().getTime() + "-TestCoordActionInputCheckXCommand-C";
+        Date startTime = DateUtils.parseDateOozieTZ("2009-02-15T23:59" + TZ);
+        Date endTime = DateUtils.parseDateOozieTZ("2009-02-16T23:59" + TZ);
+        CoordinatorJobBean job = addRecordToCoordJobTable(jobId, startTime, endTime, "latest");
+        new CoordMaterializeTransitionXCommand(job.getId(), 3600).call();
+
+        // Set push missing dependency
+        JPAService jpaService = Services.get().get(JPAService.class);
+        CoordinatorActionBean action = jpaService
+                .execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        final String pushMissingDependency = "file://" + getTestCaseDir() + "/2009/02/05";
+        action.setPushMissingDependencies(pushMissingDependency);
+        CoordActionQueryExecutor.getInstance().executeUpdate(
+                CoordActionQueryExecutor.CoordActionQuery.UPDATE_COORD_ACTION_FOR_PUSH_INPUTCHECK,
+                action);
+
+        // Update action creation time
+        String actionXML = action.getActionXml();
+        String actionCreationTime = "2009-02-15T01:00" + TZ;
+        actionXML = actionXML.replaceAll("action-actual-time=\".*\">", "action-actual-time=\"" + actionCreationTime
+                + "\">");
+        action.setActionXml(actionXML);
+        action.setCreatedTime(DateUtils.parseDateOozieTZ(actionCreationTime));
+        CoordActionQueryExecutor.getInstance().executeUpdate(
+                CoordActionQueryExecutor.CoordActionQuery.UPDATE_COORD_ACTION_FOR_INPUTCHECK,
+                action);
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertTrue(action.getActionXml().contains("action-actual-time=\"2009-02-15T01:00")) ;
+
+        new CoordActionInputCheckXCommand(job.getId() + "@1", job.getId()).call();
+        new CoordPushDependencyCheckXCommand(job.getId() + "@1").call();
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertEquals(CoordCommandUtils.RESOLVED_UNRESOLVED_SEPARATOR + "${coord:latestRange(-3,0)}",
+                action.getMissingDependencies());
+        assertEquals(pushMissingDependency, action.getPushMissingDependencies());
+
+        // providing some of the dataset dirs required as per coordinator specification with holes
+        // before and after action creation time
+        createDir(getTestCaseDir() + "/2009/03/05/");
+        createDir(getTestCaseDir() + "/2009/02/19/");
+        createDir(getTestCaseDir() + "/2009/02/12/");
+        createDir(getTestCaseDir() + "/2009/01/22/");
+        createDir(getTestCaseDir() + "/2009/01/08/");
+        createDir(getTestCaseDir() + "/2009/01/01/");
+
+        // Run input check after making latest available
+        new CoordActionInputCheckXCommand(job.getId() + "@1", job.getId()).call();
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertEquals(CoordCommandUtils.RESOLVED_UNRESOLVED_SEPARATOR + "${coord:latestRange(-3,0)}",
+                action.getMissingDependencies());
+        assertEquals(pushMissingDependency, action.getPushMissingDependencies());
+
+        // Run input check after making push dependencies available
+        createDir(getTestCaseDir() + "/2009/02/05");
+        new CoordPushDependencyCheckXCommand(job.getId() + "@1").call();
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertEquals("", action.getPushMissingDependencies());
+        checkCoordAction(job.getId() + "@1", CoordCommandUtils.RESOLVED_UNRESOLVED_SEPARATOR
+                + "${coord:latestRange(-3,0)}", CoordinatorAction.Status.WAITING);
+        new CoordActionInputCheckXCommand(job.getId() + "@1", job.getId()).call();
+        //Sleep for sometime as it gets requeued with 10ms delay on failure to acquire write lock
+        Thread.sleep(1000);
+
+        action = jpaService.execute(new CoordActionGetForInputCheckJPAExecutor(job.getId() + "@1"));
+        assertEquals("", action.getMissingDependencies());
+        actionXML = action.getActionXml();
+        // Datasets should be picked up based on current time and not action creation/actual time.
+        String resolvedList = "file://" + getTestCaseDir() + "/2009/03/05" + CoordELFunctions.INSTANCE_SEPARATOR
+                + "file://" + getTestCaseDir() + "/2009/02/19" + CoordELFunctions.INSTANCE_SEPARATOR
+                + "file://" + getTestCaseDir() + "/2009/02/12" + CoordELFunctions.INSTANCE_SEPARATOR
+                + "file://" + getTestCaseDir() + "/2009/02/05";
+        System.out.println("Expected: " + resolvedList);
+        System.out.println("Actual: " +  actionXML.substring(actionXML.indexOf("<uris>") + 6, actionXML.indexOf("</uris>")));
         assertEquals(resolvedList, actionXML.substring(actionXML.indexOf("<uris>") + 6, actionXML.indexOf("</uris>")));
     }
 
@@ -357,7 +501,8 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
             fail("Action ID " + job.getId() + "@1" + " was not stored properly in db");
         }
 
-        assertEquals(";${coord:futureRange(0,3,'5')}", action.getMissingDependencies());
+        assertEquals(CoordCommandUtils.RESOLVED_UNRESOLVED_SEPARATOR + "${coord:futureRange(0,3,'5')}",
+                action.getMissingDependencies());
 
         createDir(getTestCaseDir() + "/2009/03/12/");
 
@@ -399,16 +544,12 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         services = new Services();
         services.init();
 
-        // setting the configuration
-        XConfiguration jobConf = new XConfiguration();
-        jobConf.set(OozieClient.USER_NAME, getTestUser());
-
         // setting the test path with nonExistDir
         Path appPath = new Path(getFsTestCaseDir(), "coord");
         String inputDir = appPath.toString() + "/coord-input/2010/07/09/01/00";
         String nonExistDir = inputDir.replaceFirst("localhost", "nonExist");
         try {
-            caicc.pathExists(nonExistDir, jobConf);
+            caicc.pathExists(nonExistDir, new XConfiguration(), getTestUser());
             fail("Should throw exception due to non-existent NN path. Therefore fail");
         }
         catch (IOException ioe) {
@@ -445,6 +586,43 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         assertEquals(testedValue, effectiveValue);
     }
 
+    public void testResolveCoordConfiguration() {
+        try {
+            CoordinatorJobBean job = addRecordToCoordJobTableForWaiting("coord-job-for-action-input-check.xml",
+                    CoordinatorJob.Status.RUNNING, false, true);
+
+            CoordinatorActionBean action = addRecordToCoordActionTableForWaiting(job.getId(), 1,
+                    CoordinatorAction.Status.WAITING, "coord-action-for-action-input-check.xml");
+
+            createDir(getTestCaseDir() + "/2009/01/29/");
+            createDir(getTestCaseDir() + "/2009/01/22/");
+            createDir(getTestCaseDir() + "/2009/01/15/");
+            createDir(getTestCaseDir() + "/2009/01/08/");
+            sleep(3000);
+            new CoordActionInputCheckXCommand(action.getId(), job.getId()).call();
+            sleep(3000);
+            final JPAService jpaService = Services.get().get(JPAService.class);
+            CoordActionGetJPAExecutor coordGetCmd = new CoordActionGetJPAExecutor(action.getId());
+            CoordinatorActionBean caBean = jpaService.execute(coordGetCmd);
+
+            Element eAction = XmlUtils.parseXml(caBean.getActionXml());
+            Element configElem = eAction.getChild("action", eAction.getNamespace())
+                    .getChild("workflow", eAction.getNamespace()).getChild("configuration", eAction.getNamespace());
+            List<?> elementList = configElem.getChildren("property", configElem.getNamespace());
+            Element e1 = (Element) elementList.get(0);
+            Element e2 = (Element) elementList.get(1);
+            assertEquals(
+                    "file://,testDir/2009/29,file://,testDir/2009/22,file://,testDir/2009/15,file://,testDir/2009/08",
+                    e1.getChild("value", e1.getNamespace()).getValue());
+            assertEquals("file://,testDir/2009/29", e2.getChild("value", e1.getNamespace()).getValue());
+
+        }
+        catch (Exception e) {
+            e.printStackTrace();
+            fail("Unexpected exception");
+        }
+    }
+
     /**
      * This test verifies that for a coordinator with no input dependencies
      * action is not stuck in WAITING
@@ -464,7 +642,6 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         coordJob.setLastModifiedTime(new Date());
         coordJob.setUser("testUser");
         coordJob.setGroup("testGroup");
-        coordJob.setAuthToken("notoken");
         coordJob.setTimeZone("UTC");
         coordJob.setTimeUnit(Timeunit.DAY);
         coordJob.setMatThrottling(2);
@@ -502,7 +679,7 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         appXml += "</coordinator-app>";
         coordJob.setJobXml(appXml);
         coordJob.setLastActionNumber(0);
-        coordJob.setFrequency(1);
+        coordJob.setFrequency("1");
         coordJob.setConcurrency(1);
         JPAService jpaService = Services.get().get(JPAService.class);
         if (jpaService != null) {
@@ -530,6 +707,66 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
             fail("Action ID " + coordJob.getId() + "@1" + " was not stored properly in db");
         }
         assertEquals(action.getStatus(), CoordinatorAction.Status.READY);
+
+        action.setMissingDependencies("");
+        action.setStatus(CoordinatorAction.Status.WAITING);
+        try {
+            jpaService = Services.get().get(JPAService.class);
+            CoordActionQueryExecutor.getInstance().executeUpdate(CoordActionQuery.UPDATE_COORD_ACTION_FOR_INPUTCHECK, action);
+        }
+        catch (JPAExecutorException se) {
+            fail("Action ID " + coordJob.getId() + "@1" + " was not stored properly in db");
+        }
+
+        new CoordActionInputCheckXCommand(coordJob.getId() + "@1", coordJob.getId()).call();
+        try {
+            jpaService = Services.get().get(JPAService.class);
+            action = jpaService.execute(new CoordActionGetJPAExecutor(coordJob.getId() + "@1"));
+        }
+        catch (JPAExecutorException se) {
+            fail("Action ID " + coordJob.getId() + "@1" + " was not stored properly in db");
+        }
+        assertEquals(action.getStatus(), CoordinatorAction.Status.READY);
+    }
+
+    @Test
+    public void testTimeout() throws Exception {
+        String missingDeps = "hdfs:///dirx/filex";
+        String actionId = addInitRecords(missingDeps, null, TZ);
+        new CoordActionInputCheckXCommand(actionId, actionId.substring(0, actionId.indexOf("@"))).call();
+        // Timeout is 10 mins. Change action creation time to before 12 min to make the action
+        // timeout.
+        long timeOutCreationTime = System.currentTimeMillis() - (12 * 60 * 1000);
+        setCoordActionCreationTime(actionId, timeOutCreationTime);
+        new CoordActionInputCheckXCommand(actionId, actionId.substring(0, actionId.indexOf("@"))).call();
+        Thread.sleep(100);
+        checkCoordAction(actionId, missingDeps, CoordinatorAction.Status.TIMEDOUT);
+    }
+
+    @Test
+    public void testTimeoutWithException() throws Exception {
+        String missingDeps = "nofs:///dirx/filex";
+        String actionId = addInitRecords(missingDeps, null, TZ);
+        try {
+            new CoordActionInputCheckXCommand(actionId, actionId.substring(0, actionId.indexOf("@"))).call();
+            fail();
+        }
+        catch (Exception e) {
+            assertTrue(e.getMessage().contains("No FileSystem for scheme"));
+        }
+        // Timeout is 10 mins. Change action created time to before 12 min to make the action
+        // timeout.
+        long timeOutCreationTime = System.currentTimeMillis() - (12 * 60 * 1000);
+        setCoordActionCreationTime(actionId, timeOutCreationTime);
+        try {
+            new CoordActionInputCheckXCommand(actionId, actionId.substring(0, actionId.indexOf("@"))).call();
+            fail();
+        }
+        catch (Exception e) {
+            assertTrue(e.getMessage().contains("No FileSystem for scheme"));
+        }
+        Thread.sleep(100);
+        checkCoordAction(actionId, missingDeps, CoordinatorAction.Status.TIMEDOUT);
     }
 
     protected CoordinatorJobBean addRecordToCoordJobTableForWaiting(String testFileName, CoordinatorJob.Status status,
@@ -605,7 +842,6 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         coordJob.setLastModifiedTime(new Date());
         coordJob.setUser("testUser");
         coordJob.setGroup("testGroup");
-        coordJob.setAuthToken("notoken");
         coordJob.setTimeZone("UTC");
         coordJob.setTimeUnit(Timeunit.DAY);
         coordJob.setMatThrottling(2);
@@ -640,9 +876,13 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
             appXml += "<start-instance>${coord:" + dataInType + "(0,5)}</start-instance>";
             appXml += "<end-instance>${coord:" + dataInType + "(3,5)}</end-instance>";
         }
-        else {
+        else if (dataInType.equals("latest")) {
             appXml += "<start-instance>${coord:" + dataInType + "(-3)}</start-instance>";
             appXml += "<end-instance>${coord:" + dataInType + "(0)}</end-instance>";
+        }
+        else if (dataInType.equals("current")) {
+            appXml += "<start-instance>${coord:" + dataInType + "(-3)}</start-instance>";
+            appXml += "<end-instance>${coord:" + dataInType + "(1)}</end-instance>";
         }
         appXml += "</data-in>";
         appXml += "</input-events>";
@@ -673,8 +913,8 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         appXml += "</coordinator-app>";
         coordJob.setJobXml(appXml);
         coordJob.setLastActionNumber(0);
-        coordJob.setFrequency(1);
-        coordJob.setExecution(Execution.FIFO);
+        coordJob.setFrequency("1");
+        coordJob.setExecutionOrder(Execution.FIFO);
         coordJob.setConcurrency(1);
 
         JPAService jpaService = Services.get().get(JPAService.class);
@@ -692,20 +932,19 @@ public class TestCoordActionInputCheckXCommand extends XDataTestCase {
         return coordJob;
     }
 
-    private void checkCoordAction(String actionId) {
+    private CoordinatorActionBean checkCoordAction(String actionId, String expDeps, CoordinatorAction.Status stat)
+            throws Exception {
         try {
             JPAService jpaService = Services.get().get(JPAService.class);
             CoordinatorActionBean action = jpaService.execute(new CoordActionGetJPAExecutor(actionId));
-            System.out.println("missingDeps " + action.getMissingDependencies() + " Xml " + action.getActionXml());
-            if (action.getMissingDependencies().indexOf("/2009/01/29/") >= 0) {
-                fail("directory should be resolved :" + action.getMissingDependencies());
-            }
-            if (action.getMissingDependencies().indexOf("/2009/01/15/") < 0) {
-                fail("directory should NOT be resolved :" + action.getMissingDependencies());
-            }
+            String missDeps = action.getMissingDependencies();
+            assertEquals(expDeps, missDeps);
+            assertEquals(stat, action.getStatus());
+
+            return action;
         }
         catch (JPAExecutorException se) {
-            fail("Action ID " + actionId + " was not stored properly in db");
+            throw new Exception("Action ID " + actionId + " was not stored properly in db");
         }
     }
 

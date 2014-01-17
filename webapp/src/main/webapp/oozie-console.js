@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -32,7 +32,7 @@ var oozie_host = "";
 var flattenedObject;
 
 function getOozieClientVersion() {
-    return 1;
+    return 2;
 }
 
 function getOozieVersionsUrl() {
@@ -84,6 +84,13 @@ function checkUrl(value, metadata, record, row, col, store) {
 function getTimeZone() {
     Ext.state.Manager.setProvider(new Ext.state.CookieProvider());
     return Ext.state.Manager.get("TimezoneId","GMT");
+}
+
+if ( !String.prototype.endsWith ) {
+    String.prototype.endsWith = function(pattern) {
+        var d = this.length - pattern.length;
+        return d >= 0 && this.lastIndexOf(pattern) === d;
+    };
 }
 
 // Makes a tree node from an XML
@@ -209,7 +216,7 @@ function jobDetailsPopup(response, request) {
         fieldLabel: 'Definition',
         editable: false,
         name: 'definition',
-        width: 1005,
+        width: 1035,
         height: 400,
         autoScroll: true,
         emptyText: "Loading..."
@@ -218,7 +225,7 @@ function jobDetailsPopup(response, request) {
         fieldLabel: 'Logs',
         editable: false,
         name: 'logs',
-        width: 1010,
+        width: 1035,
         height: 400,
         autoScroll: true,
         emptyText: "Loading..."
@@ -256,74 +263,73 @@ function jobDetailsPopup(response, request) {
             fieldLabel: 'Job Id',
             editable: false,
             name: 'id',
-            width: 200,
+            width: 400,
             value: jobDetails["id"]
         }, {
             fieldLabel: 'Name',
             editable: false,
             name: 'appName',
-            width: 200,
+            width: 400,
             value: jobDetails["appName"]
         }, {
             fieldLabel: 'App Path',
             editable: false,
             name: 'appPath',
-            width: 200,
+            width: 400,
             value: jobDetails["appPath"]
         }, {
             fieldLabel: 'Run',
             editable: false,
             name: 'run',
-            width: 200,
+            width: 400,
             value: jobDetails["run"]
         }, {
             fieldLabel: 'Status',
             editable: false,
             name: 'status',
-            width: 200,
+            width: 400,
             value: jobDetails["status"]
         }, {
             fieldLabel: 'User',
             editable: false,
             name: 'user',
-            width: 200,
+            width: 400,
             value: jobDetails["user"]
         }, {
             fieldLabel: 'Group',
             editable: false,
             name: 'group',
-            width: 200,
+            width: 400,
             value: jobDetails["group"]
+        }, {
+            fieldLabel: 'Parent Coord',
+            editable: false,
+            name: 'parentId',
+            width: 400,
+            value: jobDetails["parentId"]
         }, {
             fieldLabel: 'Create Time',
             editable: false,
             name: 'createdTime',
-            width: 200,
+            width: 400,
             value: jobDetails["createdTime"]
-        }, {
-            fieldLabel: 'Nominal Time',
-            editable: false,
-            name: 'nominalTime',
-            width: 200,
-            value: jobDetails["nominalTime"]
-
         }, {
             fieldLabel: 'Start Time',
             editable: false,
             name: 'startTime',
-            width: 200,
+            width: 400,
             value: jobDetails["startTime"]
         }, {
             fieldLabel: 'Last Modified',
             editable: false,
             name: 'lastModTime',
-            width: 200,
+            width: 400,
             value: jobDetails["lastModTime"]
         },{
             fieldLabel: 'End Time',
             editable: false,
             name: 'endTime',
-            width: 200,
+            width: 400,
             value: jobDetails["endTime"]
         }, ]
     });
@@ -331,7 +337,6 @@ function jobDetailsPopup(response, request) {
         frame: true,
         labelAlign: 'right',
         labelWidth: 85,
-        width: 1010,
         items: [formFieldSet],
         tbar: [ {
             text: "&nbsp;&nbsp;&nbsp;",
@@ -356,7 +361,7 @@ function jobDetailsPopup(response, request) {
         columns: [new Ext.grid.RowNumberer(), {
             id: 'id',
             header: "Action Id",
-            width: 240,
+            width: 300,
             sortable: true,
             dataIndex: 'id'
         }, {
@@ -395,7 +400,7 @@ function jobDetailsPopup(response, request) {
         autoScroll: true,
         frame: true,
         height: 400,
-        width: 1200,
+        width: 1600,
         title: 'Actions',
         listeners: {
             cellclick: {
@@ -498,7 +503,7 @@ function jobDetailsPopup(response, request) {
                 frame: true,
                 labelAlign: 'right',
                 labelWidth: 85,
-                width: 540,
+                //width: 540,
                 items: [formFieldSet]
             });
             var urlUnit = new Ext.FormPanel();
@@ -527,13 +532,6 @@ function jobDetailsPopup(response, request) {
                             autoScroll: true,
                             value: actionStatus["conf"]
                         })
-                    }, {
-                        title: 'Child Job URLs',
-                        autoScroll: true,
-                        frame: true,
-                        labelAlign: 'right',
-                        labelWidth: 70,
-                        items: urlUnit
                     }],
                     tbar: [{
                         text: "&nbsp;&nbsp;&nbsp;",
@@ -544,6 +542,22 @@ function jobDetailsPopup(response, request) {
                     }]
                 })]
             });
+            
+            // Tab to show list of child Job URLs for pig action
+            var childJobsItem = {
+                title : 'Child Job URLs',
+                autoScroll : true,
+                frame : true,
+                labelAlign : 'right',
+                labelWidth : 70,
+                height: 350,
+                width: 540,
+                items : urlUnit
+            };
+            if (actionStatus.type == "pig" || actionStatus.type == "hive" || actionStatus.type == "map-reduce") {
+                var tabPanel = win.items.get(0);
+                tabPanel.add(childJobsItem);
+            }
             win.setPosition(50, 50);
             win.show();
         }
@@ -552,7 +566,7 @@ function jobDetailsPopup(response, request) {
 	function populateUrlUnit(actionStatus, urlUnit) {
 		var consoleUrl = actionStatus["consoleUrl"];
         var externalChildIDs = actionStatus["externalChildIDs"];
-		if(undefined !== consoleUrl && null !== consoleUrl && undefined !== externalChildIDs && null !== externalChildIDs) {
+		if(consoleUrl && externalChildIDs) {
 	        var urlPrefix = consoleUrl.trim().split(/_/)[0];
             //externalChildIds is a comma-separated string of each child job ID.
             //Create URL list by appending jobID portion after stripping "job"
@@ -620,14 +634,13 @@ function jobDetailsPopup(response, request) {
         }, {
             title: 'Job Definition',
             items: jobDefinitionArea
-
         }, {
             title: 'Job Configuration',
             items: new Ext.form.TextArea({
                 fieldLabel: 'Configuration',
                 editable: false,
                 name: 'config',
-                width: 1010,
+                width: 1035,
                 height: 430,
                 autoScroll: true,
                 value: jobDetails["conf"]
@@ -642,16 +655,16 @@ function jobDetailsPopup(response, request) {
                     fetchLogs(workflowId);
                 }
             }]
-
         }, {
             title: 'Job DAG',
             items: dagImg,
             tbar: [{
                 text: "&nbsp;&nbsp;&nbsp;",
-                icon: 'ext-2.2/resources/images/default/grid/refresh.gif',
+                // To avoid OOM
+                /*icon: 'ext-2.2/resources/images/default/grid/refresh.gif',
                 handler: function() {
                     fetchDAG(workflowId);
-                }
+                }*/
             }]
         }]
     });
@@ -673,7 +686,7 @@ function jobDetailsPopup(response, request) {
     var win = new Ext.Window({
         title: 'Job (Name: ' + appName + '/JobId: ' + workflowId + ')',
         closable: true,
-        width: 1020,
+        width: 1050,
         autoHeight: true,
         plain: true,
         items: [jobDetailsTab, jobs_grid]
@@ -688,7 +701,7 @@ function coordJobDetailsPopup(response, request) {
         fieldLabel: 'Definition',
         editable: false,
         name: 'definition',
-        width: 1005,
+        width: 1035,
         height: 400,
         autoScroll: true,
         emptyText: "Loading..."
@@ -698,7 +711,7 @@ function coordJobDetailsPopup(response, request) {
         editable: false,
 	id: 'jobLogAreaId',
         name: 'logs',
-        width: 1010,
+        width: 1035,
         height: 400,
         autoScroll: true,
         emptyText: "Loading..."
@@ -734,6 +747,7 @@ function coordJobDetailsPopup(response, request) {
 	else {
             Ext.Ajax.request({
                 url: getOozieBase() + 'job/' + coordJobId + "?show=log&type=action&scope="+actionsList,
+                timeout: 300000,
                 success: function(response, request) {
 		    processAndDisplayLog(response.responseText);
                 },
@@ -765,9 +779,16 @@ function coordJobDetailsPopup(response, request) {
     var coordJobId = jobDetails["coordJobId"];
     var appName = jobDetails["coordJobName"];
     var jobActionStatus = new Ext.data.JsonStore({
-        data: jobDetails["actions"],
-        fields: ['id', 'name', 'type', 'createdConf', 'runConf', 'actionNumber', 'createdTime', 'externalId', 'lastModifiedTime', 'nominalTime', 'status', 'missingDependencies', 'externalStatus', 'trackerUri', 'consoleUrl', 'errorCode', 'errorMessage', 'actions', 'externalChildIDs']
-
+        autoLoad: {params:{offset: 0, len: 50}},
+        totalProperty: 'total',
+        root: 'actions',
+        fields: ['id', 'name', 'type', 'createdConf', 'runConf', 'actionNumber', 'createdTime', 'externalId',
+                 'lastModifiedTime', 'nominalTime', 'status', 'missingDependencies', 'externalStatus', 'trackerUri',
+                 'consoleUrl', 'errorCode', 'errorMessage', 'actions', 'externalChildIDs'],
+        proxy: new Ext.data.HttpProxy({
+           url: getOozieBase() + 'job/' + coordJobId + "?timezone=" + getTimeZone() + "&order=desc",
+           method: 'GET'
+        })
     });
 
     var formFieldSet = new Ext.form.FieldSet({
@@ -783,38 +804,44 @@ function coordJobDetailsPopup(response, request) {
             fieldLabel: 'Name',
             editable: false,
             name: 'coordJobName',
-            width: 200,
+            width: 400,
             value: jobDetails["coordJobName"]
         }, {
             fieldLabel: 'Status',
             editable: false,
             name: 'status',
-            width: 200,
+            width: 400,
             value: jobDetails["status"]
         }, {
             fieldLabel: 'User',
             editable: false,
             name: 'user',
-            width: 200,
+            width: 400,
             value: jobDetails["user"]
         }, {
             fieldLabel: 'Group',
             editable: false,
             name: 'group',
-            width: 200,
+            width: 400,
             value: jobDetails["group"]
         }, {
             fieldLabel: 'Frequency',
             editable: false,
             name: 'frequency',
-            width: 200,
+            width: 400,
             value: jobDetails["frequency"]
         }, {
             fieldLabel: 'Unit',
             editable: false,
             name: 'timeUnit',
-            width: 200,
+            width: 400,
             value: jobDetails["timeUnit"]
+        }, {
+            fieldLabel: 'Parent Bundle',
+            editable: false,
+            name: 'bundleId',
+            width: 400,
+            value: jobDetails["bundleId"]
         }, {
             fieldLabel: 'Start Time',
             editable: false,
@@ -851,18 +878,17 @@ function coordJobDetailsPopup(response, request) {
         frame: true,
         labelAlign: 'right',
         labelWidth: 85,
-        width: 1010,
         items: [formFieldSet],
         tbar: [ {
             text: "&nbsp;&nbsp;&nbsp;",
             icon: 'ext-2.2/resources/images/default/grid/refresh.gif',
             handler: function() {
                 Ext.Ajax.request({
-                    url: getOozieBase() + 'job/' + coordJobId + "?timezone=" + getTimeZone(),
+                    url: getOozieBase() + 'job/' + coordJobId + "?timezone=" + getTimeZone() + "&offset=0&len=0",
                     success: function(response, request) {
                         jobDetails = eval("(" + response.responseText + ")");
-                        jobActionStatus.loadData(jobDetails["actions"]);
                         fs.getForm().setValues(jobDetails);
+                        jobActionStatus.reload();
                     }
 
                 });
@@ -876,7 +902,7 @@ function coordJobDetailsPopup(response, request) {
         columns: [new Ext.grid.RowNumberer(), {
             id: 'id',
             header: "Action Id",
-            width: 240,
+            width: 260,
             sortable: true,
             dataIndex: 'id'
         }, {
@@ -896,12 +922,12 @@ function coordJobDetailsPopup(response, request) {
             dataIndex: 'errorCode'
         }, {
             header: "Created Time",
-            width: 160,
+            width: 170,
             sortable: true,
             dataIndex: 'createdTime'
         }, {
             header: "Nominal Time",
-            width: 160,
+            width: 170,
             sortable: true,
             dataIndex: 'nominalTime'
         }, {
@@ -915,8 +941,9 @@ function coordJobDetailsPopup(response, request) {
         autoScroll: true,
         frame: true,
         height: 400,
-        width: 1000,
+        width: 1600,
         title: 'Actions',
+        bbar: getPagingBar(jobActionStatus),
         listeners: {
             cellclick: {
                 fn: showWorkflowPopup
@@ -1071,7 +1098,7 @@ function coordJobDetailsPopup(response, request) {
             fieldLabel: 'Configuration',
             editable: false,
             name: 'config',
-                width: 1010,
+                width: 1035,
                 height: 430,
                 autoScroll: true,
                 value: jobDetails["conf"]
@@ -1099,11 +1126,10 @@ function coordJobDetailsPopup(response, request) {
         }
         coord_jobs_grid.setVisible(false);
     });
-
     var win = new Ext.Window({
         title: 'Job (Name: ' + appName + '/coordJobId: ' + coordJobId + ')',
         closable: true,
-        width: 1020,
+        width: 1050,
         autoHeight: true,
         plain: true,
         items: [jobDetailsTab, coord_jobs_grid]
@@ -1143,25 +1169,25 @@ function bundleJobDetailsPopup(response, request) {
             fieldLabel: 'Name',
             editable: false,
             name: 'bundleJobName',
-            width: 200,
+            width: 400,
             value: jobDetails["bundleJobName"]
         }, {
             fieldLabel: 'Status',
             editable: false,
             name: 'status',
-            width: 200,
+            width: 400,
             value: jobDetails["status"]
         }, {
             fieldLabel: 'Kickoff Time',
             editable: false,
             name: 'kickoffTime',
-            width: 200,
+            width: 400,
             value: jobDetails["kickoffTime"]
         }, {
             fieldLabel: 'Created Time',
             editable: false,
             name: 'createdTime',
-            width: 200,
+            width: 400,
             value: jobDetails["createdTime"]
         }, {
             fieldLabel: 'User',
@@ -1170,7 +1196,7 @@ function bundleJobDetailsPopup(response, request) {
             width: 170,
             value: jobDetails["user"]
         }, {
-            fieldLabel: 'group',
+            fieldLabel: 'Group',
             editable: false,
             name: 'group',
             width: 170,
@@ -1272,6 +1298,16 @@ function bundleJobDetailsPopup(response, request) {
         }
     });
 
+    var jobLogArea = new Ext.form.TextArea({
+        fieldLabel: 'Logs',
+        editable: false,
+        name: 'logs',
+        width: 1010,
+        height: 400,
+        autoScroll: true,
+        emptyText: "Loading..."
+    });
+
     var jobDetailsTab = new Ext.TabPanel({
         activeTab: 0,
         autoHeight: true,
@@ -1279,22 +1315,65 @@ function bundleJobDetailsPopup(response, request) {
         items: [ {
             title: 'Bundle Job Info',
             items: fs
-        }]
-    });
+        },{
+           title: 'Bundle Job Definition',
+	   		 items: jobDefinitionArea
+	    },{
+            title: 'Bundle Job Configuration',
+             items: new Ext.form.TextArea({
+              fieldLabel: 'Configuration',
+              editable: false,
+              name: 'config',
+                width: 1010,
+                height: 430,
+                autoScroll: true,
+                value: jobDetails["conf"]
+             })
+	      },{
+           title: 'Bundle Job Log',
+	   		 items: jobLogArea,
+             tbar: [ {
+                text: "&nbsp;&nbsp;&nbsp;",
+                icon: 'ext-2.2/resources/images/default/grid/refresh.gif',
+                handler: function() {
+                    fetchLogs(bundleJobId);
+                }
+            }]
+	    }]
+     });
 
     jobDetailsTab.addListener("tabchange", function(panel, selectedTab) {
         if (selectedTab.title == "Bundle Job Info") {
             coord_jobs_grid.setVisible(true);
             return;
         }
-        //if (selectedTab.title == 'Job Log') {
-        //    fetchLogs(workflowId);
-        //}
-        //else if (selectedTab.title == 'Job Definition') {
-        //    fetchDefinition(workflowId);
-        //}
+        else if (selectedTab.title == 'Bundle Job Log') {
+            fetchLogs(bundleJobId);
+        }
+        else if (selectedTab.title == 'Bundle Job Definition') {
+            fetchDefinition(bundleJobId);
+        }
         coord_jobs_grid.setVisible(false);
     });
+
+    function fetchDefinition(bundleJobId) {
+        Ext.Ajax.request({
+            url: getOozieBase() + 'job/' + bundleJobId + "?show=definition",
+            success: function(response, request) {
+                jobDefinitionArea.setRawValue(response.responseText);
+            }
+        });
+    }
+
+	function fetchLogs(bundleJobId) {
+        Ext.Ajax.request({
+            url: getOozieBase() + 'job/' + bundleJobId + "?show=log",
+            success: function(response, request) {
+                jobLogArea.setRawValue(response.responseText);
+            }
+
+        });
+    }
 
     var win = new Ext.Window({
         title: 'Job (Name: ' + bundleJobName + '/bundleJobId: ' + bundleJobId + ')',
@@ -1326,10 +1405,19 @@ function coordJobDetailsGridWindow(coordJobId) {
          icon: Ext.MessageBox.INFO
          });
          */
-        url: getOozieBase() + 'job/' + coordJobId + "?timezone=" + getTimeZone(),
+        url: getOozieBase() + 'job/' + coordJobId + "?timezone=" + getTimeZone() + "&offset=0&len=0",
         success: coordJobDetailsPopup
-        // success: alert("succeeded " + response),
-        // failure: alert("Coordinator PopUP did not work" + coordJobId),
+    });
+}
+
+function coordActionDetailsGridWindow(coordActionId) {
+    Ext.Ajax.request({
+        url: getOozieBase() + 'job/' + coordActionId + "?timezone=" + getTimeZone(),
+        success: function(response, request) {
+            var coordAction = JSON.parse(response.responseText);
+            var workflowId = coordAction.externalId;
+            jobDetailsGridWindow(workflowId);
+        }
     });
 }
 
@@ -1385,12 +1473,12 @@ function showConfigurationInWindow(dataObject, windowTitle) {
 var coord_jobs_store = new Ext.data.JsonStore({
 	baseParams: {
         jobtype: "coord",
-        filter: "",
+        filter: "status=RUNNING;status=RUNNINGWITHERROR",
         timezone: getTimeZone()
     },
     idProperty: 'coordJobId',
     totalProperty: 'total',
-    autoLoad: true,
+    autoLoad: false,
     root: 'coordinatorjobs',
     fields: ['coordJobId', 'coordJobName', 'status', 'user', 'group', 'frequency', 'timeUnit', {name: 'startTime', sortType: Ext.data.SortTypes.asDate}, {name: 'nextMaterializedTime', sortType: Ext.data.SortTypes.asDate}],
     proxy: new Ext.data.HttpProxy({
@@ -1404,7 +1492,7 @@ coord_jobs_store.proxy.conn.method = "GET";
  */
 var jobs_store = new Ext.data.JsonStore({
     baseParams: {
-        filter: "",
+        filter: "status=RUNNING",
         timezone: getTimeZone()
     },
     idProperty: 'id',
@@ -1425,12 +1513,12 @@ var bundle_jobs_store = new Ext.data.JsonStore({
 
 	baseParams: {
         jobtype: "bundle",
-        filter: "",
+        filter: "status=RUNNING;status=RUNNINGWITHERROR",
         timezone: getTimeZone()
     },
     idProperty: 'bundleJobId',
     totalProperty: 'total',
-    autoLoad: true,
+    autoLoad: false,
     root: 'bundlejobs',
     fields: ['bundleJobId', 'bundleJobName', 'bundleJobPath', 'conf', 'status', {name: 'kickoffTime', sortType: Ext.data.SortTypes.asDate}, {name: 'startTime', sortType: Ext.data.SortTypes.asDate}, {name: 'endTime', sortType: Ext.data.SortTypes.asDate}, {name: 'pauseTime', sortType: Ext.data.SortTypes.asDate}, {name: 'createdTime', sortType: Ext.data.SortTypes.asDate}, 'user', 'group', 'bundleCoordJobs'],
     proxy: new Ext.data.HttpProxy({
@@ -1468,35 +1556,51 @@ var refreshCustomJobsAction = new Ext.Action({
         jobs_store.baseParams.filter = this.text;
         jobs_store.baseParams.timezone = getTimeZone();
         jobs_store.reload();
+        Ext.getCmp('jobs_active').setIconClass('');
+        Ext.getCmp('jobs_all').setIconClass('');
+        Ext.getCmp('jobs_done').setIconClass('');
     }
 
 });
 
 var refreshActiveJobsAction = new Ext.Action({
+    id: 'jobs_active',
     text: 'Active Jobs',
     handler: function() {
         jobs_store.baseParams.filter = 'status=RUNNING';
         jobs_store.baseParams.timezone = getTimeZone();
         jobs_store.reload();
+        Ext.getCmp('jobs_active').setIconClass('job-filter');
+        Ext.getCmp('jobs_all').setIconClass('');
+        Ext.getCmp('jobs_done').setIconClass('');
+
     }
 });
 
 var refreshAllJobsAction = new Ext.Action({
+    id: 'jobs_all',
     text: 'All Jobs',
     handler: function() {
         jobs_store.baseParams.filter = '';
         jobs_store.baseParams.timezone = getTimeZone();
         jobs_store.reload();
+        Ext.getCmp('jobs_active').setIconClass('');
+        Ext.getCmp('jobs_all').setIconClass('job-filter');
+        Ext.getCmp('jobs_done').setIconClass('');
     }
 
 });
 
 var refreshDoneJobsAction = new Ext.Action({
+    id: 'jobs_done',
     text: 'Done Jobs',
     handler: function() {
-        jobs_store.baseParams.filter = 'status=SUCCEEDED;status=KILLED';
+        jobs_store.baseParams.filter = 'status=SUCCEEDED;status=KILLED;status=FAILED';
         jobs_store.baseParams.timezone = getTimeZone();
         jobs_store.reload();
+        Ext.getCmp('jobs_active').setIconClass('');
+        Ext.getCmp('jobs_all').setIconClass('');
+        Ext.getCmp('jobs_done').setIconClass('job-filter');
     }
 });
 
@@ -1506,16 +1610,23 @@ var refreshCoordCustomJobsAction = new Ext.Action({
         coord_jobs_store.baseParams.filter = this.text;
         coord_jobs_store.baseParams.timezone = getTimeZone();
         coord_jobs_store.reload();
+        Ext.getCmp('coord_active').setIconClass('');
+        Ext.getCmp('coord_all').setIconClass('');
+        Ext.getCmp('coord_done').setIconClass('');
     }
 });
 
 
 var refreshCoordActiveJobsAction = new Ext.Action({
+    id: 'coord_active',
     text: 'Active Jobs',
     handler: function() {
-        coord_jobs_store.baseParams.filter = 'status=RUNNING';
+        coord_jobs_store.baseParams.filter = 'status=RUNNING;status=RUNNINGWITHERROR';
         coord_jobs_store.baseParams.timezone = getTimeZone();
         coord_jobs_store.reload();
+        Ext.getCmp('coord_active').setIconClass('job-filter');
+        Ext.getCmp('coord_all').setIconClass('');
+        Ext.getCmp('coord_done').setIconClass('');
         /*
          Ext.Ajax.request( {
          url: getOozieBase() + 'jobs/?jobtype=coord',
@@ -1529,11 +1640,15 @@ var refreshCoordActiveJobsAction = new Ext.Action({
 });
 
 var refreshCoordAllJobsAction = new Ext.Action({
+    id: 'coord_all',
     text: 'All Jobs',
     handler: function() {
         coord_jobs_store.baseParams.filter = '';
         coord_jobs_store.baseParams.timezone = getTimeZone();
         coord_jobs_store.reload();
+        Ext.getCmp('coord_active').setIconClass('');
+        Ext.getCmp('coord_all').setIconClass('job-filter');
+        Ext.getCmp('coord_done').setIconClass('');
         /*
          Ext.Ajax.request( {
          url: getOozieBase() + 'jobs/?jobtype=coord',
@@ -1547,11 +1662,15 @@ var refreshCoordAllJobsAction = new Ext.Action({
 });
 
 var refreshCoordDoneJobsAction = new Ext.Action({
+    id: 'coord_done',
     text: 'Done Jobs',
     handler: function() {
-        coord_jobs_store.baseParams.filter = 'status=SUCCEEDED;status=KILLED';
+        coord_jobs_store.baseParams.filter = 'status=SUCCEEDED;status=KILLED;status=FAILED;status=DONEWITHERROR';
         coord_jobs_store.baseParams.timezone = getTimeZone();
         coord_jobs_store.reload();
+        Ext.getCmp('coord_active').setIconClass('');
+        Ext.getCmp('coord_all').setIconClass('');
+        Ext.getCmp('coord_done').setIconClass('job-filter');
         /*
          Ext.Ajax.request( {
          url: getOozieBase() + 'jobs' + '?jobtype=coord',
@@ -1565,29 +1684,53 @@ var refreshCoordDoneJobsAction = new Ext.Action({
 });
 
 var refreshBundleActiveJobsAction = new Ext.Action({
+    id: 'bundle_active',
     text: 'Active Jobs',
     handler: function() {
-        bundle_jobs_store.baseParams.filter = 'status=RUNNING';
+        bundle_jobs_store.baseParams.filter = 'status=RUNNING;status=RUNNINGWITHERROR';
         bundle_jobs_store.baseParams.timezone = getTimeZone();
         bundle_jobs_store.reload();
+        Ext.getCmp('bundle_active').setIconClass('job-filter');
+        Ext.getCmp('bundle_all').setIconClass('');
+        Ext.getCmp('bundle_done').setIconClass('');
     }
 });
 
 var refreshBundleAllJobsAction = new Ext.Action({
+    id: 'bundle_all',
     text: 'All Jobs',
     handler: function() {
 		bundle_jobs_store.baseParams.filter = '';
-                bundle_jobs_store.baseParams.timezone = getTimeZone();
+        bundle_jobs_store.baseParams.timezone = getTimeZone();
 		bundle_jobs_store.reload();
+		Ext.getCmp('bundle_active').setIconClass('');
+        Ext.getCmp('bundle_all').setIconClass('job-filter');
+        Ext.getCmp('bundle_done').setIconClass('');
     }
 });
 
 var refreshBundleDoneJobsAction = new Ext.Action({
+    id: 'bundle_done',
     text: 'Done Jobs',
     handler: function() {
-	bundle_jobs_store.baseParams.filter = 'status=SUCCEEDED;status=KILLED';
+	    bundle_jobs_store.baseParams.filter = 'status=SUCCEEDED;status=KILLED;status=FAILED;status=DONEWITHERROR';
         bundle_jobs_store.baseParams.timezone = getTimeZone();
         bundle_jobs_store.reload();
+        Ext.getCmp('bundle_active').setIconClass('');
+        Ext.getCmp('bundle_all').setIconClass('');
+        Ext.getCmp('bundle_done').setIconClass('job-filter');
+    }
+});
+
+var refreshBundleCustomJobsAction = new Ext.Action({
+    text: 'status=KILLED',
+    handler: function() {
+        bundle_jobs_store.baseParams.filter = this.text;
+        bundle_jobs_store.baseParams.timezone = getTimeZone();
+        bundle_jobs_store.reload();
+        Ext.getCmp('bundle_active').setIconClass('');
+        Ext.getCmp('bundle_all').setIconClass('');
+        Ext.getCmp('bundle_done').setIconClass('');
     }
 });
 
@@ -1626,6 +1769,20 @@ var changeCoordFilterAction = new Ext.Action({
                 coord_jobs_store.baseParams.filter = text;
                 coord_jobs_store.baseParams.timezone = getTimeZone();
                 coord_jobs_store.reload();
+            }
+        });
+    }
+});
+
+var changeBundleFilterAction = new Ext.Action({
+    text: 'Custom Filter',
+    handler: function() {
+        Ext.Msg.prompt('Filter Criteria', 'Filter text:', function(btn, text) {
+            if (btn == 'ok' && text) {
+                refreshBundleCustomJobsAction.setText(text);
+                bundle_jobs_store.baseParams.filter = text;
+                bundle_jobs_store.baseParams.timezone = getTimeZone();
+                bundle_jobs_store.reload();
             }
         });
     }
@@ -1679,7 +1836,7 @@ var serverVersion = new Ext.Action({
             url: getOozieBase() + 'admin/build-version',
             success: function(response, request) {
                 var ret = eval("(" + response.responseText + ")");
-                serverVersion.setText("<font color='800000' size='2>[" + ret['buildVersion'] + "]</font>");
+                serverVersion.setText("<font size='2'>Server version [" + ret['buildVersion'] + "]</font>");
             }
         })
     }
@@ -1729,32 +1886,6 @@ var viewInstrumentation = new Ext.Action({
         });
     }
 
-});
-
-var viewCoordJobs = new Ext.Action({
-    text: 'All Jobs',
-    handler: function() {
-        /*
-         Ext.Ajax.request( {
-         url: getOozieBase() + 'jobs/?jobtype=coord',
-         success: function(response, request) {
-         var configData = getConfigObject(response.responseText);
-         coord_job_store.loadData(configData);
-         },
-         });
-         */
-        // coord_jobs_store.baseParams.filter = 'jobtype=coord';
-        coord_jobs_store.baseParams.timezone = getTimeZone();
-        coord_jobs_store.reload();
-    }
-});
-
-var viewBundleJobs = new Ext.Action({
-    text: 'All Jobs',
-    handler: function() {
-        bundle_jobs_store.baseParams.timezone = getTimeZone();
-        bundle_jobs_store.reload();
-    }
 });
 
 var viewSystemDetails = new Ext.Action({
@@ -1825,7 +1956,7 @@ function initConsole() {
         columns: [new Ext.grid.RowNumberer(), {
             id: 'id',
             header: "Job Id",
-            width: 190,
+            width: 220,
             sortable: true,
             dataIndex: 'id'
         }, {
@@ -1947,6 +2078,15 @@ function initConsole() {
         title: 'Instrumentation'
 
     });
+
+    var slaDashboard = new Ext.Panel({
+        title: 'SLA',
+        autoLoad : {
+            url : 'console/sla/oozie-sla.html',
+            scripts: true
+        }
+    });
+
     var coordJobArea = new Ext.grid.GridPanel({
         store: coord_jobs_store,
         loadMask: true,
@@ -1977,12 +2117,12 @@ function initConsole() {
             sortable: true,
             dataIndex: 'group'
         }, {
-            header: "frequency",
+            header: "Frequency",
             width: 70,
             sortable: true,
             dataIndex: 'frequency'
         }, {
-            header: "unit",
+            header: "Unit",
             width: 60,
             sortable: true,
             dataIndex: 'timeUnit'
@@ -2080,6 +2220,10 @@ function initConsole() {
                 bundle_jobs_store.reload();
             }
         }, refreshBundleAllJobsAction, refreshBundleActiveJobsAction, refreshBundleDoneJobsAction,
+        {
+            text: 'Custom Filter',
+            menu: [refreshBundleCustomJobsAction, changeBundleFilterAction, helpFilterAction ]
+        },
             {
                 xtype: 'tbfill'
             }, checkStatus, serverVersion],
@@ -2112,34 +2256,81 @@ function initConsole() {
             listeners:
             { select: { fn:function(combo, value)
                 {
-                    Ext.state.Manager.setProvider(new Ext.state.CookieProvider());
+                    Ext.state.Manager.setProvider(new Ext.state.CookieProvider({
+                        expires: new Date(new Date().getTime()+315569259747) // about 10 years from now!
+                    }));
                     Ext.state.Manager.set("TimezoneId",this.value);
                 }
             }}
         }]
     });
+    // main tab panel containing Workflow Jobs, Coordinator Jobs, Bundle Jobs, System Info, ...
     var tabs = new Ext.TabPanel({
         renderTo: 'oozie-console',
-        height: 500,
-        width: 1050,
+        height: 580,
         title: "Oozie Web Console"
 
     });
     tabs.add(jobs_grid);
     tabs.add(coordJobArea);
     tabs.add(bundleJobArea);
+    if (isSLAServiceEnabled == "true") {
+        tabs.add(slaDashboard);
+    }
     tabs.add(adminGrid);
     tabs.add(resultArea);
     tabs.add(settingsArea);
     tabs.setActiveTab(jobs_grid);
+    // showing Workflow Jobs active tab as default
+    // and loading coord,bundle only when tab opened
+    Ext.getCmp('jobs_active').setIconClass('job-filter');
+    var isFirstLoadCoord = 0;
+    var isFirstLoadBundle = 0;
+    tabs.addListener("tabchange", function(panel, selectedTab) {
+        if (selectedTab.title == 'Workflow Jobs') {
+            jobs_grid.setVisible(true);
+            return;
+        }
+        else if (selectedTab.title == 'Coordinator Jobs') {
+            if (isFirstLoadCoord == 0) {
+                refreshCoordActiveJobsAction.execute();
+                isFirstLoadCoord = 1;
+            }
+            coordJobArea.setVisible(true);
+            return;
+        }
+        else if (selectedTab.title == 'Bundle Jobs') {
+           if (isFirstLoadBundle == 0) {
+                refreshBundleActiveJobsAction.execute();
+                isFirstLoadBundle = 1;
+            }
+            bundleJobArea.setVisible(true);
+            return;
+        }
+    });
     checkStatus.execute();
     viewConfig.execute();
     serverVersion.execute();
     viewInstrumentation.execute();
-    // viewCoordJobs.execute();
     var jobId = getReqParam("job");
     if (jobId != "") {
-        jobDetailsGridWindow(jobId);
+        if (jobId.endsWith("-C")) {
+            coordJobDetailsGridWindow(jobId);
+        }
+        else if (jobId.endsWith("-B")) {
+            bundleJobDetailsGridWindow(jobId);
+        }
+        else if (jobId.endsWith("-W")) {
+            jobDetailsGridWindow(jobId);
+        }
+        else if (jobId.indexOf("-C@") !=-1) {
+            coordActionDetailsGridWindow(jobId);
+        }
+        else if (jobId.endsWith("-W@") !=-1) {
+            jobId = jobId.substring(0, index + 2);
+            jobDetailsGridWindow(jobId);
+        }
+
     }
 }
 // now the on ready function

@@ -47,13 +47,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 /**
  * The HadoopAccessorService returns HadoopAccessor instances configured to work on behalf of a user-group. <p/> The
  * default accessor used is the base accessor which just injects the UGI into the configuration instance used to
- * create/obtain JobClient and ileSystem instances. <p/> The HadoopAccess class to use can be configured in the
- * <code>oozie-site.xml</code> using the <code>oozie.service.HadoopAccessorService.accessor.class</code> property.
+ * create/obtain JobClient and FileSystem instances.
  */
 public class HadoopAccessorService implements Service {
 
@@ -69,14 +67,14 @@ public class HadoopAccessorService implements Service {
     public static final String KERBEROS_PRINCIPAL = CONF_PREFIX + "kerberos.principal";
     public static final Text MR_TOKEN_ALIAS = new Text("oozie mr token");
 
-    private static final String OOZIE_HADOOP_ACCESSOR_SERVICE_CREATED = "oozie.HadoopAccessorService.created";
+    protected static final String OOZIE_HADOOP_ACCESSOR_SERVICE_CREATED = "oozie.HadoopAccessorService.created";
     /** The Kerberos principal for the job tracker.*/
-    private static final String JT_PRINCIPAL = "mapreduce.jobtracker.kerberos.principal";
+    protected static final String JT_PRINCIPAL = "mapreduce.jobtracker.kerberos.principal";
     /** The Kerberos principal for the resource manager.*/
-    private static final String RM_PRINCIPAL = "yarn.resourcemanager.principal";
-    private static final String HADOOP_JOB_TRACKER = "mapred.job.tracker";
-    private static final String HADOOP_JOB_TRACKER_2 = "mapreduce.jobtracker.address";
-    private static final String HADOOP_YARN_RM = "yarn.resourcemanager.address";
+    protected static final String RM_PRINCIPAL = "yarn.resourcemanager.principal";
+    protected static final String HADOOP_JOB_TRACKER = "mapred.job.tracker";
+    protected static final String HADOOP_JOB_TRACKER_2 = "mapreduce.jobtracker.address";
+    protected static final String HADOOP_YARN_RM = "yarn.resourcemanager.address";
     private static final Map<String, Text> mrTokenRenewers = new HashMap<String, Text>();
 
     private Set<String> jobTrackerWhitelist = new HashSet<String>();
@@ -85,15 +83,18 @@ public class HadoopAccessorService implements Service {
     private Map<String, File> actionConfigDirs = new HashMap<String, File>();
     private Map<String, Map<String, XConfiguration>> actionConfigs = new HashMap<String, Map<String, XConfiguration>>();
 
-    private ConcurrentMap<String, UserGroupInformation> userUgiMap;
+    private UserGroupInformationService ugiService;
 
     /**
      * Supported filesystem schemes for namespace federation
      */
     public static final String SUPPORTED_FILESYSTEMS = CONF_PREFIX + "supported.filesystems";
+    public static final String[] DEFAULT_SUPPORTED_SCHEMES = new String[]{"hdfs","hftp","webhdfs"};
     private Set<String> supportedSchemes;
+    private boolean allSchemesSupported;
 
     public void init(Services services) throws ServiceException {
+        this.ugiService = services.get(UserGroupInformationService.class);
         init(services.getConf());
     }
 
@@ -131,13 +132,15 @@ public class HadoopAccessorService implements Service {
             UserGroupInformation.setConfiguration(ugiConf);
         }
 
-        userUgiMap = new ConcurrentHashMap<String, UserGroupInformation>();
+        if (ugiService == null) { //for testing purposes, see XFsTestCase
+            this.ugiService = new UserGroupInformationService();
+        }
 
         loadHadoopConfigs(conf);
         preLoadActionConfigs(conf);
 
         supportedSchemes = new HashSet<String>();
-        String[] schemesFromConf = conf.getStrings(SUPPORTED_FILESYSTEMS, new String[]{"hdfs","hftp","webhdfs"});
+        String[] schemesFromConf = conf.getStrings(SUPPORTED_FILESYSTEMS, DEFAULT_SUPPORTED_SCHEMES);
         if(schemesFromConf != null) {
             for (String scheme: schemesFromConf) {
                 scheme = scheme.trim();
@@ -147,9 +150,9 @@ public class HadoopAccessorService implements Service {
                         throw new ServiceException(ErrorCode.E0100, getClass().getName(),
                             SUPPORTED_FILESYSTEMS + " should contain either only wildcard or explicit list, not both");
                     }
-                } else {
-                    supportedSchemes.add(scheme);
+                    allSchemesSupported = true;
                 }
+                supportedSchemes.add(scheme);
             }
         }
     }
@@ -267,13 +270,7 @@ public class HadoopAccessorService implements Service {
     }
 
     private UserGroupInformation getUGI(String user) throws IOException {
-        UserGroupInformation ugi = userUgiMap.get(user);
-        if (ugi == null) {
-            // taking care of a race condition, the latest UGI will be discarded
-            ugi = UserGroupInformation.createProxyUser(user, UserGroupInformation.getLoginUser());
-            userUgiMap.putIfAbsent(user, ugi);
-        }
-        return ugi;
+        return ugiService.getProxyUser(user);
     }
 
     /**
@@ -461,7 +458,7 @@ public class HadoopAccessorService implements Service {
         }
     }
 
-    public static Text getMRDelegationTokenRenewer(JobConf jobConf) throws IOException {
+    public Text getMRDelegationTokenRenewer(JobConf jobConf) throws IOException {
         if (UserGroupInformation.isSecurityEnabled()) { // secure cluster
             return getMRTokenRenewerInternal(jobConf);
         }
@@ -471,7 +468,7 @@ public class HadoopAccessorService implements Service {
     }
 
     // Package private for unit test purposes
-    static Text getMRTokenRenewerInternal(JobConf jobConf) throws IOException {
+    Text getMRTokenRenewerInternal(JobConf jobConf) throws IOException {
         // Getting renewer correctly for JT principal also though JT in hadoop 1.x does not have
         // support for renewing/cancelling tokens
         String servicePrincipal = jobConf.get(RM_PRINCIPAL, jobConf.get(JT_PRINCIPAL));
@@ -527,13 +524,21 @@ public class HadoopAccessorService implements Service {
      */
 
     public void checkSupportedFilesystem(URI uri) throws HadoopAccessorException {
+        if (allSchemesSupported)
+            return;
         String uriScheme = uri.getScheme();
-        if(!supportedSchemes.isEmpty()) {
-            XLog.getLog(this.getClass()).debug("Checking if filesystem " + uriScheme + " is supported");
-            if (!supportedSchemes.contains(uriScheme)) {
-                throw new HadoopAccessorException(ErrorCode.E0904, uriScheme, uri.toString());
-            }
-        }
+        if (uriScheme != null) {    // skip the check if no scheme is given
+            if(!supportedSchemes.isEmpty()) {
+                XLog.getLog(this.getClass()).debug("Checking if filesystem " + uriScheme + " is supported");
+                if (!supportedSchemes.contains(uriScheme)) {
+                    throw new HadoopAccessorException(ErrorCode.E0904, uriScheme, uri.toString());
+                }
+             }
+         }
+    }
+
+    public Set<String> getSupportedSchemes() {
+        return supportedSchemes;
     }
 
 }

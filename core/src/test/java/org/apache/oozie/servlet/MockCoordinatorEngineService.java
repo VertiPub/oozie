@@ -22,6 +22,7 @@ import java.io.Writer;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.BaseEngineException;
@@ -35,7 +36,6 @@ import org.apache.oozie.XException;
 import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.client.CoordinatorJob;
 import org.apache.oozie.client.CoordinatorJob.Execution;
-import org.apache.oozie.client.rest.JsonCoordinatorAction;
 import org.apache.oozie.client.rest.RestConstants;
 import org.apache.oozie.service.CoordinatorEngineService;
 import org.apache.oozie.util.DateUtils;
@@ -50,7 +50,10 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
 
     public static final String LOG = "log";
 
+    public static final String JOB_ID_END = "-C";
     public static String did = null;
+    public static Integer offset = null;
+    public static Integer length = null;
     public static List<CoordinatorJob> coordJobs;
     public static List<Boolean> started;
     public static final int INIT_COORD_COUNT = 4;
@@ -61,6 +64,8 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
 
     public static void reset() {
         did = null;
+        offset = null;
+        length = null;
         coordJobs = new ArrayList<CoordinatorJob>();
         started = new ArrayList<Boolean>();
         for (int i = 0; i < INIT_COORD_COUNT; i++) {
@@ -70,8 +75,8 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
     }
 
     @Override
-    public CoordinatorEngine getCoordinatorEngine(String user, String authToken) {
-        return new MockCoordinatorEngine(user, authToken);
+    public CoordinatorEngine getCoordinatorEngine(String user) {
+        return new MockCoordinatorEngine(user);
     }
 
     @Override
@@ -84,8 +89,8 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
         public MockCoordinatorEngine() {
         }
 
-        public MockCoordinatorEngine(String user, String authToken) {
-            super(user, authToken);
+        public MockCoordinatorEngine(String user) {
+            super(user);
         }
 
         @Override
@@ -128,6 +133,22 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
         }
 
         @Override
+        public CoordinatorActionInfo killActions(String jobId, String rangeType, String scope)
+                throws CoordinatorEngineException {
+            did = RestConstants.JOB_ACTION_KILL;
+            int idx = validateCoordinatorIdx(jobId);
+            started.set(idx, false);
+
+            List<CoordinatorAction> actions = coordJobs.get(idx).getActions();
+            List<CoordinatorActionBean> actionBeans = new ArrayList<CoordinatorActionBean>();
+            for (CoordinatorAction action : actions) {
+                actionBeans.add((CoordinatorActionBean) action);
+            }
+            return new CoordinatorActionInfo(actionBeans);
+
+        }
+
+        @Override
         public void change(String jobId, String changeValue) throws CoordinatorEngineException {
             did = RestConstants.JOB_ACTION_CHANGE;
             int idx = validateCoordinatorIdx(jobId);
@@ -161,8 +182,11 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
         }
 
         @Override
-        public CoordinatorJobBean getCoordJob(String jobId, String filter, int start, int length) throws BaseEngineException {
+        public CoordinatorJobBean getCoordJob(String jobId, String filter, int start, int length, boolean desc)
+                throws BaseEngineException {
             did = RestConstants.JOB_SHOW_INFO;
+            MockCoordinatorEngineService.offset = start;
+            MockCoordinatorEngineService.length = length;
             int idx = validateCoordinatorIdx(jobId);
             return (CoordinatorJobBean) coordJobs.get(idx);
         }
@@ -175,15 +199,15 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
         }
 
         @Override
-        public void streamLog(String jobId, Writer writer) throws IOException, BaseEngineException {
+        public void streamLog(String jobId, Writer writer, Map<String, String[]> params) throws IOException, BaseEngineException {
             did = RestConstants.JOB_SHOW_LOG;
             validateCoordinatorIdx(jobId);
             writer.write(LOG);
         }
 
         @Override
-        public void streamLog(String jobId, String logRetrievalScope, String logRetrievalType, Writer writer)
-                throws IOException, BaseEngineException {
+        public void streamLog(String jobId, String logRetrievalScope, String logRetrievalType, Writer writer,
+                Map<String, String[]> params) throws IOException, BaseEngineException {
             did = RestConstants.JOB_SHOW_LOG;
             validateCoordinatorIdx(jobId);
             writer.write(LOG);
@@ -192,7 +216,14 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
         private int validateCoordinatorIdx(String jobId) throws CoordinatorEngineException {
             int idx = -1;
             try {
-                idx = Integer.parseInt(jobId.replace(JOB_ID, ""));
+                if (jobId.endsWith(JOB_ID_END)) {
+                    jobId = jobId.replace(JOB_ID, "");
+                    jobId = jobId.replace(JOB_ID_END, "");
+                }
+                else {
+                    jobId = jobId.replace(JOB_ID, "");
+                }
+                idx = Integer.parseInt(jobId);
             }
             catch (Exception e) {
                 throw new CoordinatorEngineException(ErrorCode.ETEST, jobId);
@@ -216,11 +247,10 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
         coordJob.setLastModifiedTime(new Date());
         coordJob.setUser(USER);
         coordJob.setGroup(GROUP);
-        coordJob.setAuthToken("notoken");
         coordJob.setConf(CONFIGURATION);
         coordJob.setLastActionNumber(0);
-        coordJob.setFrequency(1);
-        coordJob.setExecution(Execution.FIFO);
+        coordJob.setFrequency("1");
+        coordJob.setExecutionOrder(Execution.FIFO);
         coordJob.setConcurrency(1);
         try {
             coordJob.setEndTime(DateUtils.parseDateOozieTZ("2009-02-03T23:59Z"));
@@ -230,7 +260,7 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
             e.printStackTrace();
         }
 
-        List<JsonCoordinatorAction> actions = new ArrayList<JsonCoordinatorAction>();
+        List<CoordinatorActionBean> actions = new ArrayList<CoordinatorActionBean>();
         for (int i = 0; i < idx; i++) {
             actions.add(createDummyAction(i, JOB_ID + idx));
         }
@@ -249,11 +279,10 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
         coordJob.setLastModifiedTime(new Date());
         coordJob.setUser(USER);
         coordJob.setGroup(GROUP);
-        coordJob.setAuthToken("notoken");
         coordJob.setConf(conf.toString());
         coordJob.setLastActionNumber(0);
-        coordJob.setFrequency(1);
-        coordJob.setExecution(Execution.FIFO);
+        coordJob.setFrequency("1");
+        coordJob.setExecutionOrder(Execution.FIFO);
         coordJob.setConcurrency(1);
         try {
             coordJob.setEndTime(DateUtils.parseDateOozieTZ("2009-02-03T23:59Z"));
@@ -263,7 +292,7 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
             e.printStackTrace();
         }
 
-        List<JsonCoordinatorAction> actions = new ArrayList<JsonCoordinatorAction>();
+        List<CoordinatorActionBean> actions = new ArrayList<CoordinatorActionBean>();
         for (int i = 0; i < idx; i++) {
             actions.add(createDummyAction(i, JOB_ID + idx));
         }
@@ -272,7 +301,7 @@ public class MockCoordinatorEngineService extends CoordinatorEngineService {
         return coordJob;
     }
 
-    private static JsonCoordinatorAction createDummyAction(int idx, String jobId) {
+    private static CoordinatorActionBean createDummyAction(int idx, String jobId) {
         CoordinatorActionBean action = new CoordinatorActionBean();
         action.setId(ACTION_ID + idx);
         action.setJobId(jobId);

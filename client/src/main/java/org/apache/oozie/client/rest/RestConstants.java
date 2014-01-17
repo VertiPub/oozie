@@ -46,6 +46,8 @@ public interface RestConstants {
 
     public static final String LEN_PARAM = "len";
 
+    public static final String ORDER_PARAM = "order";
+
     public static final String JOB_FILTER_PARAM = "filter";
 
     public static final String JOB_RESOURCE = "/job";
@@ -61,6 +63,7 @@ public interface RestConstants {
     public static final String JOB_ACTION_KILL = "kill";
 
     public static final String JOB_ACTION_CHANGE = "change";
+
     public static final String JOB_CHANGE_VALUE = "value";
 
     public static final String JOB_ACTION_RERUN = "rerun";
@@ -87,13 +90,13 @@ public interface RestConstants {
 
     public static final String JOB_BUNDLE_RERUN_DATE_SCOPE_PARAM = "date-scope";
 
-    public static final String JOB_COORD_RERUN_TYPE_PARAM = "type";
+    public static final String JOB_COORD_RANGE_TYPE_PARAM = "type";
 
-    public static final String JOB_COORD_RERUN_DATE = "date";
+    public static final String JOB_COORD_SCOPE_DATE = "date";
 
-    public static final String JOB_COORD_RERUN_ACTION = "action";
+    public static final String JOB_COORD_SCOPE_ACTION = "action";
 
-    public static final String JOB_COORD_RERUN_SCOPE_PARAM = "scope";
+    public static final String JOB_COORD_SCOPE_PARAM = "scope";
 
     public static final String JOB_COORD_RERUN_REFRESH_PARAM = "refresh";
 
@@ -146,8 +149,14 @@ public interface RestConstants {
     public static final String SLA = "sla";
 
     public static final String DO_AS_PARAM = "doAs";
-    
+
     public static final String TIME_ZONE_PARAM = "timezone";
-    
+
     public static final String ADMIN_TIME_ZONES_RESOURCE = "available-timezones";
+
+    public static final String ADMIN_JMS_INFO = "jmsinfo";
+
+    public static final String JOB_SHOW_JMS_TOPIC = "jmstopic";
+
+    public static final String ADMIN_AVAILABLE_OOZIE_SERVERS_RESOURCE = "available-oozie-servers";
 }

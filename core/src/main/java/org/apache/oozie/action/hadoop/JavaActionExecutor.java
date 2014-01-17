@@ -17,13 +17,10 @@
  */
 package org.apache.oozie.action.hadoop;
 
-import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.StringReader;
 import java.net.ConnectException;
@@ -39,6 +36,8 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.Map.Entry;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.filecache.DistributedCache;
@@ -61,6 +60,8 @@ import org.apache.oozie.client.WorkflowAction;
 import org.apache.oozie.service.HadoopAccessorException;
 import org.apache.oozie.service.HadoopAccessorService;
 import org.apache.oozie.service.Services;
+import org.apache.oozie.service.ShareLibService;
+import org.apache.oozie.service.URIHandlerService;
 import org.apache.oozie.service.WorkflowAppService;
 import org.apache.oozie.servlet.CallbackServlet;
 import org.apache.oozie.util.ELEvaluator;
@@ -89,15 +90,26 @@ public class JavaActionExecutor extends ActionExecutor {
     public final static String MAX_EXTERNAL_STATS_SIZE = "oozie.external.stats.max.size";
     public static final String ACL_VIEW_JOB = "mapreduce.job.acl-view-job";
     public static final String ACL_MODIFY_JOB = "mapreduce.job.acl-modify-job";
+    private static final String HADOOP_YARN_UBER_MODE = "mapreduce.job.ubertask.enable";
+    public static final String HADOOP_MAP_MEMORY_MB = "mapreduce.map.memory.mb";
+    public static final String HADOOP_CHILD_JAVA_OPTS = "mapred.child.java.opts";
+    public static final String HADOOP_MAP_JAVA_OPTS = "mapreduce.map.java.opts";
+    public static final String HADOOP_CHILD_JAVA_ENV = "mapred.child.env";
+    public static final String HADOOP_MAP_JAVA_ENV = "mapreduce.map.env";
+    public static final String YARN_AM_RESOURCE_MB = "yarn.app.mapreduce.am.resource.mb";
+    public static final String YARN_AM_COMMAND_OPTS = "yarn.app.mapreduce.am.command-opts";
+    public static final String YARN_AM_ENV = "yarn.app.mapreduce.am.env";
+    public static final int YARN_MEMORY_MB_MIN = 512;
     private static int maxActionOutputLen;
     private static int maxExternalStatsSize;
-
+    private static int maxFSGlobMax;
     private static final String SUCCEEDED = "SUCCEEDED";
     private static final String KILLED = "KILLED";
     private static final String FAILED = "FAILED";
     private static final String FAILED_KILLED = "FAILED/KILLED";
     private static final String RUNNING = "RUNNING";
     protected XLog log = XLog.getLog(getClass());
+    private static final Pattern heapPattern = Pattern.compile("-Xmx(([0-9]+)[mMgG])");
 
     static {
         DISALLOWED_PROPERTIES.add(HADOOP_USER);
@@ -109,7 +121,6 @@ public class JavaActionExecutor extends ActionExecutor {
 
     public JavaActionExecutor() {
         this("java");
-        requiresNNJT = true;
     }
 
     protected JavaActionExecutor(String type) {
@@ -117,66 +128,49 @@ public class JavaActionExecutor extends ActionExecutor {
         requiresNNJT = true;
     }
 
-    protected String getLauncherJarName() {
-        return getType() + "-launcher.jar";
-    }
-
-    protected List<Class> getLauncherClasses() {
+    public static List<Class> getCommonLauncherClasses() {
         List<Class> classes = new ArrayList<Class>();
         classes.add(LauncherMapper.class);
-        classes.add(LauncherSecurityManager.class);
-        classes.add(LauncherException.class);
-        classes.add(LauncherMainException.class);
-        classes.add(FileSystemActions.class);
-        classes.add(PrepareActionsDriver.class);
-        classes.add(ActionStats.class);
-        classes.add(ActionType.class);
+        classes.addAll(Services.get().get(URIHandlerService.class).getClassesForLauncher());
         return classes;
+    }
+
+    public List<Class> getLauncherClasses() {
+       return null;
     }
 
     @Override
     public void initActionType() {
-        XLog log = XLog.getLog(getClass());
         super.initActionType();
         maxActionOutputLen = getOozieConf()
           .getInt(LauncherMapper.CONF_OOZIE_ACTION_MAX_OUTPUT_DATA,
           // TODO: Remove the below config get in a subsequent release..
           // This other irrelevant property is only used to
           // preserve backwards compatibility cause of a typo.
-          // See OOZIE-4.
+                  // See OOZIE-4.
           getOozieConf().getInt(CallbackServlet.CONF_MAX_DATA_LEN,
             2 * 1024));
         //Get the limit for the maximum allowed size of action stats
         maxExternalStatsSize = getOozieConf().getInt(JavaActionExecutor.MAX_EXTERNAL_STATS_SIZE, MAX_EXTERNAL_STATS_SIZE_DEFAULT);
         maxExternalStatsSize = (maxExternalStatsSize == -1) ? Integer.MAX_VALUE : maxExternalStatsSize;
-        try {
-            List<Class> classes = getLauncherClasses();
-            Class[] launcherClasses = classes.toArray(new Class[classes.size()]);
-            IOUtils.createJar(new File(getOozieRuntimeDir()), getLauncherJarName(), launcherClasses);
+        //Get the limit for the maximum number of globbed files/dirs for FS operation
+        maxFSGlobMax = getOozieConf().getInt(LauncherMapper.CONF_OOZIE_ACTION_FS_GLOB_MAX, LauncherMapper.GLOB_MAX_DEFAULT);
 
-            registerError(UnknownHostException.class.getName(), ActionExecutorException.ErrorType.TRANSIENT, "JA001");
-            registerError(AccessControlException.class.getName(), ActionExecutorException.ErrorType.NON_TRANSIENT,
-                    "JA002");
-            registerError(DiskChecker.DiskOutOfSpaceException.class.getName(),
-                    ActionExecutorException.ErrorType.NON_TRANSIENT, "JA003");
-            registerError(org.apache.hadoop.hdfs.protocol.QuotaExceededException.class.getName(),
-                    ActionExecutorException.ErrorType.NON_TRANSIENT, "JA004");
-            registerError(org.apache.hadoop.hdfs.server.namenode.SafeModeException.class.getName(),
-                    ActionExecutorException.ErrorType.NON_TRANSIENT, "JA005");
-            registerError(ConnectException.class.getName(), ActionExecutorException.ErrorType.TRANSIENT, "  JA006");
-            registerError(JDOMException.class.getName(), ActionExecutorException.ErrorType.ERROR, "JA007");
-            registerError(FileNotFoundException.class.getName(), ActionExecutorException.ErrorType.ERROR, "JA008");
-            registerError(IOException.class.getName(), ActionExecutorException.ErrorType.TRANSIENT, "JA009");
-        }
-        catch (IOException ex) {
-            throw new RuntimeException(ex);
-        }
-        catch (java.lang.NoClassDefFoundError err) {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            err.printStackTrace(new PrintStream(baos));
-            log.warn(baos.toString());
-        }
+        registerError(UnknownHostException.class.getName(), ActionExecutorException.ErrorType.TRANSIENT, "JA001");
+        registerError(AccessControlException.class.getName(), ActionExecutorException.ErrorType.NON_TRANSIENT,
+                "JA002");
+        registerError(DiskChecker.DiskOutOfSpaceException.class.getName(),
+                ActionExecutorException.ErrorType.NON_TRANSIENT, "JA003");
+        registerError(org.apache.hadoop.hdfs.protocol.QuotaExceededException.class.getName(),
+                ActionExecutorException.ErrorType.NON_TRANSIENT, "JA004");
+        registerError(org.apache.hadoop.hdfs.server.namenode.SafeModeException.class.getName(),
+                ActionExecutorException.ErrorType.NON_TRANSIENT, "JA005");
+        registerError(ConnectException.class.getName(), ActionExecutorException.ErrorType.TRANSIENT, "  JA006");
+        registerError(JDOMException.class.getName(), ActionExecutorException.ErrorType.ERROR, "JA007");
+        registerError(FileNotFoundException.class.getName(), ActionExecutorException.ErrorType.ERROR, "JA008");
+        registerError(IOException.class.getName(), ActionExecutorException.ErrorType.TRANSIENT, "JA009");
     }
+
 
     /**
      * Get the maximum allowed size of stats
@@ -238,6 +232,7 @@ public class JavaActionExecutor extends ActionExecutor {
                 XConfiguration actionDefaultConf = has.createActionDefaultConf(conf.get(HADOOP_JOB_TRACKER), getType());
                 injectLauncherProperties(actionDefaultConf, launcherConf);
                 injectLauncherProperties(inlineConf, launcherConf);
+                injectLauncherUseUberMode(launcherConf);
                 checkForDisallowedProps(launcherConf, "launcher configuration");
                 XConfiguration.copy(launcherConf, conf);
             }
@@ -246,6 +241,100 @@ public class JavaActionExecutor extends ActionExecutor {
         catch (IOException ex) {
             throw convertException(ex);
         }
+    }
+
+    void injectLauncherUseUberMode(Configuration launcherConf) {
+        // Set Uber Mode for the launcher (YARN only, ignored by MR1) if not set by action conf and not disabled in oozie-site
+        if (launcherConf.get(HADOOP_YARN_UBER_MODE) == null) {
+            if (getOozieConf().getBoolean("oozie.action.launcher.mapreduce.job.ubertask.enable", false)) {
+                launcherConf.setBoolean(HADOOP_YARN_UBER_MODE, true);
+                updateConfForUberMode(launcherConf);
+            }
+        }
+    }
+
+    void updateConfForUberMode(Configuration launcherConf) {
+
+        // memory.mb
+        int launcherMapMemoryMB = launcherConf.getInt(HADOOP_MAP_MEMORY_MB, 1536);
+        int amMemoryMB = launcherConf.getInt(YARN_AM_RESOURCE_MB, 1536);
+        // YARN_MEMORY_MB_MIN to provide buffer.
+        // suppose launcher map aggressively use high memory, need some headroom for AM
+        int memoryMB = Math.max(launcherMapMemoryMB, amMemoryMB) + YARN_MEMORY_MB_MIN;
+        // limit to 4096 in case of 32 bit
+        if(launcherMapMemoryMB < 4096 && amMemoryMB < 4096 && memoryMB > 4096){
+            memoryMB = 4096;
+        }
+        launcherConf.setInt(YARN_AM_RESOURCE_MB, memoryMB);
+
+        // child.java.opts
+        String launcherMapOpts = launcherConf.get(HADOOP_MAP_JAVA_OPTS);
+        if (launcherMapOpts == null) {
+            launcherMapOpts = launcherConf.get(HADOOP_CHILD_JAVA_OPTS);
+        }
+        String amChildOpts = launcherConf.get(YARN_AM_COMMAND_OPTS);
+        StringBuffer optsStr = new StringBuffer();
+        int heapSizeForMap = extractHeapSizeMB(launcherMapOpts);
+        int heapSizeForAm = extractHeapSizeMB(amChildOpts);
+        int heapSize = Math.max(heapSizeForMap, heapSizeForAm) + YARN_MEMORY_MB_MIN;
+        // limit to 3584 in case of 32 bit
+        if(heapSizeForMap < 4096 && heapSizeForAm < 4096 && heapSize > 3584) {
+            heapSize = 3584;
+        }
+        if (amChildOpts != null) {
+            optsStr.append(amChildOpts);
+        }
+        if (launcherMapOpts != null) {
+            optsStr.append(" ");
+            optsStr.append(launcherMapOpts);
+        }
+        if (heapSize > 0) {
+            // append calculated total heap size to the end
+            optsStr.append(" ");
+            optsStr.append("-Xmx" + heapSize + "m");
+        }
+        launcherConf.set(YARN_AM_COMMAND_OPTS, optsStr.toString());
+
+        // child.env
+        String launcherMapEnv = launcherConf.get(HADOOP_MAP_JAVA_ENV);
+        if (launcherMapEnv == null) {
+            launcherMapEnv = launcherConf.get(HADOOP_CHILD_JAVA_ENV);
+        }
+        String envForAm = launcherConf.get(YARN_AM_ENV);
+        StringBuffer envStr = new StringBuffer();
+        if (envForAm != null) {
+            envStr.append(envForAm);
+        }
+        if (launcherMapEnv != null) {
+            if (envForAm != null) {
+                envStr.append(",");
+            }
+            envStr.append(launcherMapEnv);
+        }
+        launcherConf.set(YARN_AM_ENV, envStr.toString());
+    }
+
+    public int extractHeapSizeMB(String input) {
+        int ret = 0;
+        if(input == null || input.equals(""))
+            return ret;
+        Matcher m = heapPattern.matcher(input);
+        String heapStr = null;
+        String heapNum = null;
+        // Grabs the last match which takes effect (in case that multiple Xmx options specified)
+        while (m.find()) {
+            heapStr = m.group(1);
+            heapNum = m.group(2);
+        }
+        if (heapStr != null) {
+            // when Xmx specified in Gigabyte
+            if(heapStr.endsWith("g") || heapStr.endsWith("G")) {
+                ret = Integer.parseInt(heapNum) * 1024;
+            } else {
+                ret = Integer.parseInt(heapNum);
+            }
+        }
+        return ret;
     }
 
     public static void parseJobXmlAndConfiguration(Context context, Element element, Path appPath, Configuration conf)
@@ -295,31 +384,31 @@ public class JavaActionExecutor extends ActionExecutor {
 
     Configuration addToCache(Configuration conf, Path appPath, String filePath, boolean archive)
             throws ActionExecutorException {
-        Path path = null;
+
+        URI uri = null;
         try {
-            if (filePath.startsWith("/")) {
-                path = new Path(filePath);
+            uri = new URI(filePath);
+            URI baseUri = appPath.toUri();
+            if (uri.getScheme() == null) {
+                String resolvedPath = uri.getPath();
+                if (!resolvedPath.startsWith("/")) {
+                    resolvedPath = baseUri.getPath() + "/" + resolvedPath;
+                }
+                uri = new URI(baseUri.getScheme(), baseUri.getAuthority(), resolvedPath, uri.getQuery(), uri.getFragment());
             }
-            else {
-                path = new Path(appPath, filePath);
-            }
-            URI uri = new URI(path.toUri().getPath());
             if (archive) {
-                DistributedCache.addCacheArchive(uri, conf);
+                DistributedCache.addCacheArchive(uri.normalize(), conf);
             }
             else {
                 String fileName = filePath.substring(filePath.lastIndexOf("/") + 1);
-                if (fileName.endsWith(".so") || fileName.contains(".so.")) {  // .so files
-                    uri = new Path(path.toString() + "#" + fileName).toUri();
-                    uri = new URI(uri.getPath());
-                    DistributedCache.addCacheFile(uri, conf);
+                if (fileName.endsWith(".so") || fileName.contains(".so.")) { // .so files
+                    uri = new URI(uri.getScheme(), uri.getAuthority(), uri.getPath(), uri.getQuery(), fileName);
+                    DistributedCache.addCacheFile(uri.normalize(), conf);
                 }
                 else if (fileName.endsWith(".jar")) { // .jar files
                     if (!fileName.contains("#")) {
-                        path = new Path(uri.toString());
-
                         String user = conf.get("user.name");
-                        Services.get().get(HadoopAccessorService.class).addFileToClassPath(user, path, conf);
+                        Services.get().get(HadoopAccessorService.class).addFileToClassPath(user, new Path(uri.normalize()), conf);
                     }
                     else {
                         DistributedCache.addCacheFile(uri, conf);
@@ -327,10 +416,9 @@ public class JavaActionExecutor extends ActionExecutor {
                 }
                 else { // regular files
                     if (!fileName.contains("#")) {
-                        uri = new Path(path.toString() + "#" + fileName).toUri();
-                        uri = new URI(uri.getPath());
+                        uri = new URI(uri.getScheme(), uri.getAuthority(), uri.getPath(), uri.getQuery(), fileName);
                     }
-                    DistributedCache.addCacheFile(uri, conf);
+                    DistributedCache.addCacheFile(uri.normalize(), conf);
                 }
             }
             DistributedCache.createSymlink(conf);
@@ -338,17 +426,8 @@ public class JavaActionExecutor extends ActionExecutor {
         }
         catch (Exception ex) {
             XLog.getLog(getClass()).debug(
-                    "Errors when add to DistributedCache. Path=" + path + ", archive=" + archive + ", conf="
+                    "Errors when add to DistributedCache. Path=" + uri.toString() + ", archive=" + archive + ", conf="
                             + XmlUtils.prettyPrint(conf).toString());
-            throw convertException(ex);
-        }
-    }
-
-    String getOozieLauncherJar(Context context) throws ActionExecutorException {
-        try {
-            return new Path(context.getActionDir(), getLauncherJarName()).toString();
-        }
-        catch (Exception ex) {
             throw convertException(ex);
         }
     }
@@ -359,8 +438,7 @@ public class JavaActionExecutor extends ActionExecutor {
             Path tempActionDir = new Path(actionDir.getParent(), actionDir.getName() + ".tmp");
             if (!actionFs.exists(actionDir)) {
                 try {
-                    actionFs.copyFromLocalFile(new Path(getOozieRuntimeDir(), getLauncherJarName()), new Path(
-                            tempActionDir, getLauncherJarName()));
+                    actionFs.mkdirs(tempActionDir);
                     actionFs.rename(tempActionDir, actionDir);
                 }
                 catch (IOException ex) {
@@ -388,39 +466,74 @@ public class JavaActionExecutor extends ActionExecutor {
         }
     }
 
-    protected void addShareLib(Path appPath, Configuration conf, String actionShareLibName)
-    throws ActionExecutorException {
-        if (actionShareLibName != null) {
-            try {
+    protected void addShareLib(Path appPath, Configuration conf, String[] actionShareLibNames)
+            throws ActionExecutorException {
+        if (actionShareLibNames != null) {
+            for (String actionShareLibName : actionShareLibNames) {
                 Path systemLibPath = Services.get().get(WorkflowAppService.class).getSystemLibPath();
                 if (systemLibPath != null) {
-                    Path actionLibPath = new Path(systemLibPath, actionShareLibName);
+                    Path actionLibPath = new Path(systemLibPath, actionShareLibName.trim());
                     String user = conf.get("user.name");
                     FileSystem fs;
-                    // If the actionLibPath has a valid scheme and authority, then use them to determine the filesystem that the
-                    // sharelib resides on; otherwise, assume it resides on the same filesystem as the appPath and use the appPath
-                    // to determine the filesystem
-                    if (actionLibPath.toUri().getScheme() != null && actionLibPath.toUri().getAuthority() != null) {
-                        fs = Services.get().get(HadoopAccessorService.class).createFileSystem(user, actionLibPath.toUri(), conf);
-                    }
-                    else {
-                        fs = Services.get().get(HadoopAccessorService.class).createFileSystem(user, appPath.toUri(), conf);
-                    }
-                    if (fs.exists(actionLibPath)) {
-                        FileStatus[] files = fs.listStatus(actionLibPath);
-                        for (FileStatus file : files) {
-                            addToCache(conf, actionLibPath, file.getPath().toUri().getPath(), false);
+                    // If the actionLibPath has a valid scheme and authority,
+                    // then use them to determine the filesystem that the sharelib resides on;
+                    // otherwise, assume it resides on the same filesystem as the appPath and use
+                    // the appPath to determine the filesystem
+                    try {
+                        if (actionLibPath.toUri().getScheme() != null && actionLibPath.toUri().getAuthority() != null) {
+                            fs = Services.get().get(HadoopAccessorService.class)
+                                    .createFileSystem(user, actionLibPath.toUri(), conf);
                         }
+                        else {
+                            fs = Services.get().get(HadoopAccessorService.class)
+                                    .createFileSystem(user, appPath.toUri(), conf);
+                        }
+                        if (fs.exists(actionLibPath)) {
+                            FileStatus[] files = fs.listStatus(actionLibPath);
+                            for (FileStatus file : files) {
+                                if (!file.isDir()) {
+                                    addToCache(conf, actionLibPath, file.getPath().toUri().getPath(), false);
+                                }
+                            }
+                        }
+                    }
+                    catch (HadoopAccessorException ex) {
+                        throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED, ex.getErrorCode()
+                                .toString(), ex.getMessage());
+                    }
+                    catch (IOException ex) {
+                        throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED, "It should never happen",
+                                ex.getMessage());
+                    }
+
+                }
+            }
+        }
+    }
+
+    protected void addSystemShareLibForAction(Configuration conf) throws ActionExecutorException {
+        ShareLibService shareLibService = Services.get().get(ShareLibService.class);
+        // ShareLibService is null for test cases
+        if (shareLibService != null) {
+            try {
+                List<Path> listOfPaths = shareLibService
+                        .getActionSystemLibCommonJars(JavaActionExecutor.OOZIE_COMMON_LIBDIR);
+                FileSystem fs = listOfPaths.get(0).getFileSystem(conf);
+                for (Path actionLibPath : listOfPaths) {
+                    DistributedCache.addFileToClassPath(actionLibPath, conf, fs);
+                    DistributedCache.createSymlink(conf);
+                }
+                listOfPaths = shareLibService.getActionSystemLibCommonJars(getType());
+                if (listOfPaths != null) {
+                    for (Path actionLibPath : listOfPaths) {
+                        DistributedCache.addFileToClassPath(actionLibPath, conf, fs);
+                        DistributedCache.createSymlink(conf);
                     }
                 }
             }
-            catch (HadoopAccessorException ex){
-                throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED,
-                        ex.getErrorCode().toString(), ex.getMessage());
-            }
-            catch (IOException ex){
-                throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED,
-                        "It should never happen", ex.getMessage());
+            catch (IOException ex) {
+                throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED, "It should never happen",
+                        ex.getMessage());
             }
         }
     }
@@ -457,12 +570,9 @@ public class JavaActionExecutor extends ActionExecutor {
     }
 
     @SuppressWarnings("unchecked")
-    void setLibFilesArchives(Context context, Element actionXml, Path appPath, Configuration conf)
+    public void setLibFilesArchives(Context context, Element actionXml, Path appPath, Configuration conf)
             throws ActionExecutorException {
         Configuration proto = context.getProtoActionConf();
-
-        // launcher JAR
-        addToCache(conf, appPath, getOozieLauncherJar(context), false);
 
         // Workflow lib/
         String[] paths = proto.getStrings(WorkflowAppService.APP_LIB_PATH_LIST);
@@ -499,8 +609,8 @@ public class JavaActionExecutor extends ActionExecutor {
             throws ActionExecutorException {
         // Add action specific share libs
         addActionShareLib(appPath, conf, context, actionXml);
-        // Add common sharelibs for Oozie
-        addShareLib(appPath, conf, JavaActionExecutor.OOZIE_COMMON_LIBDIR);
+        // Add common sharelibs for Oozie and launcher jars
+        addSystemShareLibForAction(conf);
     }
 
     private void addActionShareLib(Path appPath, Configuration conf, Context context, Element actionXml)
@@ -516,7 +626,7 @@ public class JavaActionExecutor extends ActionExecutor {
         // Action sharelibs are only added if user has specified to use system libpath
         if (wfJobConf.getBoolean(OozieClient.USE_SYSTEM_LIBPATH, false)) {
             // add action specific sharelibs
-            addShareLib(appPath, conf, getShareLibName(context, actionXml, conf));
+            addShareLib(appPath, conf, getShareLibNames(context, actionXml, conf));
         }
     }
 
@@ -581,21 +691,23 @@ public class JavaActionExecutor extends ActionExecutor {
                     prepareXML = XmlUtils.prettyPrint(prepareElement).toString().trim();
                 }
             }
-            LauncherMapper.setupLauncherInfo(launcherJobConf, jobId, actionId, actionDir, recoveryId, actionConf,
+            LauncherMapperHelper.setupLauncherInfo(launcherJobConf, jobId, actionId, actionDir, recoveryId, actionConf,
                     prepareXML);
 
-            LauncherMapper.setupMainClass(launcherJobConf, getLauncherMain(launcherJobConf, actionXml));
-            LauncherMapper.setupSupportedFileSystems(
-                launcherJobConf, Services.get().getConf().get(HadoopAccessorService.SUPPORTED_FILESYSTEMS));
-            LauncherMapper.setupMaxOutputData(launcherJobConf, maxActionOutputLen);
-            LauncherMapper.setupMaxExternalStatsSize(launcherJobConf, maxExternalStatsSize);
+            LauncherMapperHelper.setupMainClass(launcherJobConf, getLauncherMain(launcherJobConf, actionXml));
+            LauncherMapperHelper.setupLauncherURIHandlerConf(launcherJobConf);
+            LauncherMapperHelper.setupMaxOutputData(launcherJobConf, maxActionOutputLen);
+            LauncherMapperHelper.setupMaxExternalStatsSize(launcherJobConf, maxExternalStatsSize);
+            if (getOozieConf().get(LauncherMapper.CONF_OOZIE_ACTION_FS_GLOB_MAX) != null) {
+                LauncherMapperHelper.setupMaxFSGlob(launcherJobConf, maxFSGlobMax);
+            }
 
             List<Element> list = actionXml.getChildren("arg", ns);
             String[] args = new String[list.size()];
             for (int i = 0; i < list.size(); i++) {
                 args[i] = list.get(i).getTextTrim();
             }
-            LauncherMapper.setupMainArguments(launcherJobConf, args);
+            LauncherMapperHelper.setupMainArguments(launcherJobConf, args);
 
             List<Element> javaopts = actionXml.getChildren("java-opt", ns);
             for (Element opt: javaopts) {
@@ -710,7 +822,7 @@ public class JavaActionExecutor extends ActionExecutor {
             injectLauncherCallback(context, launcherJobConf);
             XLog.getLog(getClass()).debug("Creating Job Client for action " + action.getId());
             jobClient = createJobClient(context, launcherJobConf);
-            String launcherId = LauncherMapper.getRecoveryId(launcherJobConf, context.getActionDir(), context
+            String launcherId = LauncherMapperHelper.getRecoveryId(launcherJobConf, context.getActionDir(), context
                     .getRecoveryId());
             boolean alreadyRunning = launcherId != null;
             RunningJob runningJob;
@@ -730,7 +842,8 @@ public class JavaActionExecutor extends ActionExecutor {
                 XLog.getLog(getClass()).debug("Submitting the job through Job Client for action " + action.getId());
 
                 // setting up propagation of the delegation token.
-                Token<DelegationTokenIdentifier> mrdt = jobClient.getDelegationToken(HadoopAccessorService
+                HadoopAccessorService has = Services.get().get(HadoopAccessorService.class);
+                Token<DelegationTokenIdentifier> mrdt = jobClient.getDelegationToken(has
                         .getMRDelegationTokenRenewer(launcherJobConf));
                 launcherJobConf.getCredentials().addToken(HadoopAccessorService.MR_TOKEN_ALIAS, mrdt);
 
@@ -839,6 +952,9 @@ public class JavaActionExecutor extends ActionExecutor {
                     }
                     else {
                         log.debug("Credentials object is null for name= " + credName + ", type=" + credProps.getType());
+                        throw new ActionExecutorException(ActionExecutorException.ErrorType.ERROR, "JA020",
+                            "Could not load credentials of type [{0}] with name [{1}]]; perhaps it was not defined"
+                                + " in oozie-site.xml?", credProps.getType(), credName);
                     }
                 }
             }
@@ -947,13 +1063,18 @@ public class JavaActionExecutor extends ActionExecutor {
      *
      * @param context
      * @param jobConf
-     * @return
+     * @return JobClient
      * @throws HadoopAccessorException
      */
     protected JobClient createJobClient(Context context, JobConf jobConf) throws HadoopAccessorException {
         String user = context.getWorkflow().getUser();
         String group = context.getWorkflow().getGroup();
         return Services.get().get(HadoopAccessorService.class).createJobClient(user, jobConf);
+    }
+
+    protected RunningJob getRunningJob(Context context, WorkflowAction action, JobClient jobClient) throws Exception{
+        RunningJob runningJob = jobClient.getJob(JobID.forName(action.getExternalId()));
+        return runningJob;
     }
 
     @Override
@@ -965,9 +1086,8 @@ public class JavaActionExecutor extends ActionExecutor {
             FileSystem actionFs = context.getAppFileSystem();
             JobConf jobConf = createBaseHadoopConf(context, actionXml);
             jobClient = createJobClient(context, jobConf);
-            RunningJob runningJob = jobClient.getJob(JobID.forName(action.getExternalId()));
+            RunningJob runningJob = getRunningJob(context, action, jobClient);
             if (runningJob == null) {
-                context.setExternalStatus(FAILED);
                 context.setExecutionData(FAILED, null);
                 throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED, "JA017",
                         "Unknown hadoop job [{0}] associated with action [{1}].  Failing this action!", action
@@ -975,17 +1095,12 @@ public class JavaActionExecutor extends ActionExecutor {
             }
             if (runningJob.isComplete()) {
                 Path actionDir = context.getActionDir();
-
-                String user = context.getWorkflow().getUser();
-                String group = context.getWorkflow().getGroup();
-                if (LauncherMapper.hasIdSwap(runningJob, user, group, actionDir)) {
+                String newId = null;
+                // load sequence file into object
+                Map<String, String> actionData = LauncherMapperHelper.getActionData(actionFs, actionDir, jobConf);
+                if (actionData.containsKey(LauncherMapper.ACTION_DATA_NEW_ID)) {
+                    newId = actionData.get(LauncherMapper.ACTION_DATA_NEW_ID);
                     String launcherId = action.getExternalId();
-                    Path idSwapPath = LauncherMapper.getIdSwapPath(context.getActionDir());
-                    InputStream is = actionFs.open(idSwapPath);
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(is));
-                    Properties props = PropertiesUtils.readProperties(reader, maxActionOutputLen);
-                    reader.close();
-                    String newId = props.getProperty("id");
                     runningJob = jobClient.getJob(JobID.forName(newId));
                     if (runningJob == null) {
                         context.setExternalStatus(FAILED);
@@ -993,27 +1108,44 @@ public class JavaActionExecutor extends ActionExecutor {
                                 "Unknown hadoop job [{0}] associated with action [{1}].  Failing this action!", newId,
                                 action.getId());
                     }
-
-                    context.setStartData(newId, action.getTrackerUri(), runningJob.getTrackingURL());
+                    context.setExternalChildIDs(newId);
                     XLog.getLog(getClass()).info(XLog.STD, "External ID swap, old ID [{0}] new ID [{1}]", launcherId,
                             newId);
                 }
+                else {
+                    String externalIDs = actionData.get(LauncherMapper.ACTION_DATA_EXTERNAL_CHILD_IDS);
+                    if (externalIDs != null) {
+                        context.setExternalChildIDs(externalIDs);
+                        XLog.getLog(getClass()).info(XLog.STD, "Hadoop Jobs launched : [{0}]", externalIDs);
+                    }
+                }
                 if (runningJob.isComplete()) {
+                    // fetching action output and stats for the Map-Reduce action.
+                    if (newId != null) {
+                        actionData = LauncherMapperHelper.getActionData(actionFs, context.getActionDir(), jobConf);
+                    }
                     XLog.getLog(getClass()).info(XLog.STD, "action completed, external ID [{0}]",
                             action.getExternalId());
-                    if (runningJob.isSuccessful() && LauncherMapper.isMainSuccessful(runningJob)) {
-                        getActionData(actionFs, runningJob, action, context);
-                        XLog.getLog(getClass()).info(XLog.STD, "action produced output");
+                    if (LauncherMapperHelper.isMainSuccessful(runningJob)) {
+                        if (LauncherMapperHelper.hasOutputData(actionData)) {
+                            context.setExecutionData(SUCCEEDED, PropertiesUtils.stringToProperties(actionData
+                                    .get(LauncherMapper.ACTION_DATA_OUTPUT_PROPS)));
+                            XLog.getLog(getClass()).info(XLog.STD, "action produced output");
+                        }
+                        else {
+                            context.setExecutionData(SUCCEEDED, null);
+                        }
+                        if (LauncherMapperHelper.hasStatsData(actionData)) {
+                            context.setExecutionStats(actionData.get(LauncherMapper.ACTION_DATA_STATS));
+                            XLog.getLog(getClass()).info(XLog.STD, "action produced stats");
+                        }
                     }
                     else {
                         XLog log = XLog.getLog(getClass());
                         String errorReason;
-                        Path actionError = LauncherMapper.getErrorPath(context.getActionDir());
-                        if (actionFs.exists(actionError)) {
-                            InputStream is = actionFs.open(actionError);
-                            BufferedReader reader = new BufferedReader(new InputStreamReader(is));
-                            Properties props = PropertiesUtils.readProperties(reader, -1);
-                            reader.close();
+                        if (actionData.containsKey(LauncherMapper.ACTION_DATA_ERROR_PROPS)) {
+                            Properties props = PropertiesUtils.stringToProperties(actionData
+                                    .get(LauncherMapper.ACTION_DATA_ERROR_PROPS));
                             String errorCode = props.getProperty("error.code");
                             if (errorCode.equals("0")) {
                                 errorCode = "JA018";
@@ -1037,7 +1169,6 @@ public class JavaActionExecutor extends ActionExecutor {
                             log.warn(errorReason);
                         }
                         context.setExecutionData(FAILED_KILLED, null);
-                        setActionCompletionData(context, actionFs);
                     }
                 }
                 else {
@@ -1072,32 +1203,6 @@ public class JavaActionExecutor extends ActionExecutor {
                 }
             }
         }
-    }
-
-    /**
-     * Get the output data of an action. Subclasses should override this method
-     * to get action specific output data.
-     *
-     * @param actionFs the FileSystem object
-     * @param runningJob the runningJob
-     * @param action the Workflow action
-     * @param context executor context
-     *
-     */
-    protected void getActionData(FileSystem actionFs, RunningJob runningJob, WorkflowAction action, Context context)
-            throws HadoopAccessorException, JDOMException, IOException, URISyntaxException {
-        Properties props = null;
-        if (getCaptureOutput(action)) {
-            props = new Properties();
-            if (LauncherMapper.hasOutputData(runningJob)) {
-                Path actionOutput = LauncherMapper.getOutputDataPath(context.getActionDir());
-                InputStream is = actionFs.open(actionOutput);
-                BufferedReader reader = new BufferedReader(new InputStreamReader(is));
-                props = PropertiesUtils.readProperties(reader, maxActionOutputLen);
-                reader.close();
-            }
-        }
-        context.setExecutionData(SUCCEEDED, props);
     }
 
     protected boolean getCaptureOutput(WorkflowAction action) throws JDOMException {
@@ -1161,14 +1266,15 @@ public class JavaActionExecutor extends ActionExecutor {
 
 
     /**
-     * Return the sharelib name for the action.
+     * Return the sharelib names for the action.
      * <p/>
-     * If <code>NULL</code> or emtpy, it means that the action does not use the action
+     * If <code>NULL</code> or empty, it means that the action does not use the action
      * sharelib.
      * <p/>
      * If a non-empty string, i.e. <code>foo</code>, it means the action uses the
-     * action sharelib subdirectory <code>foo</code> and all JARs in the sharelib
-     * <code>foo</code> directory will be in the action classpath.
+     * action sharelib sub-directory <code>foo</code> and all JARs in the sharelib
+     * <code>foo</code> directory will be in the action classpath. Multiple sharelib
+     * sub-directories can be specified as a comma separated list.
      * <p/>
      * The resolution is done using the following precedence order:
      * <ul>
@@ -1181,18 +1287,22 @@ public class JavaActionExecutor extends ActionExecutor {
      *
      * @param context executor context.
      * @param actionXml
-     *@param conf action configuration.  @return the action sharelib name.
+     * @param conf action configuration.
+     * @return the action sharelib names.
      */
-    protected String getShareLibName(Context context, Element actionXml, Configuration conf) {
-        String name = conf.get(ACTION_SHARELIB_FOR + getType());
-        if (name == null) {
+    protected String[] getShareLibNames(Context context, Element actionXml, Configuration conf) {
+        String[] names = conf.getStrings(ACTION_SHARELIB_FOR + getType());
+        if (names == null || names.length == 0) {
             try {
                 XConfiguration jobConf = new XConfiguration(new StringReader(context.getWorkflow().getConf()));
-                name = jobConf.get(ACTION_SHARELIB_FOR + getType());
-                if (name == null) {
-                    name = Services.get().getConf().get(ACTION_SHARELIB_FOR + getType());
-                    if (name == null) {
-                        name = getDefaultShareLibName(actionXml);
+                names = jobConf.getStrings(ACTION_SHARELIB_FOR + getType());
+                if (names == null || names.length == 0) {
+                    names = Services.get().getConf().getStrings(ACTION_SHARELIB_FOR + getType());
+                    if (names == null || names.length == 0) {
+                        String name = getDefaultShareLibName(actionXml);
+                        if (name != null) {
+                            names = new String[] { name };
+                        }
                     }
                 }
             }
@@ -1200,7 +1310,7 @@ public class JavaActionExecutor extends ActionExecutor {
                 throw new RuntimeException("It cannot happen, " + ex.toString(), ex);
             }
         }
-        return name;
+        return names;
     }
 
     private final static String ACTION_SHARELIB_FOR = "oozie.action.sharelib.for.";

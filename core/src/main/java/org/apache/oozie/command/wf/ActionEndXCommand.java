@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -39,11 +39,15 @@ import org.apache.oozie.client.SLAEvent.Status;
 import org.apache.oozie.client.rest.JsonBean;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
-import org.apache.oozie.executor.jpa.BulkUpdateInsertJPAExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.executor.jpa.WorkflowActionGetJPAExecutor;
 import org.apache.oozie.executor.jpa.WorkflowJobGetJPAExecutor;
+import org.apache.oozie.executor.jpa.WorkflowActionQueryExecutor.WorkflowActionQuery;
+import org.apache.oozie.executor.jpa.WorkflowJobQueryExecutor.WorkflowJobQuery;
 import org.apache.oozie.service.ActionService;
+import org.apache.oozie.service.EventHandlerService;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.service.UUIDService;
@@ -53,6 +57,7 @@ import org.apache.oozie.util.XLog;
 import org.apache.oozie.util.db.SLADbXOperations;
 import org.apache.oozie.workflow.WorkflowInstance;
 
+@SuppressWarnings("deprecation")
 public class ActionEndXCommand extends ActionXCommand<Void> {
     public static final String COULD_NOT_END = "COULD_NOT_END";
     public static final String END_DATA_MISSING = "END_DATA_MISSING";
@@ -63,7 +68,7 @@ public class ActionEndXCommand extends ActionXCommand<Void> {
     private WorkflowActionBean wfAction = null;
     private JPAService jpaService = null;
     private ActionExecutor executor = null;
-    private List<JsonBean> updateList = new ArrayList<JsonBean>();
+    private List<UpdateEntry> updateList = new ArrayList<UpdateEntry>();
     private List<JsonBean> insertList = new ArrayList<JsonBean>();
 
     public ActionEndXCommand(String actionId, String type) {
@@ -80,6 +85,11 @@ public class ActionEndXCommand extends ActionXCommand<Void> {
     @Override
     public String getEntityKey() {
         return this.jobId;
+    }
+
+    @Override
+    public String getKey() {
+        return getName() + "_" + actionId;
     }
 
     @Override
@@ -118,7 +128,7 @@ public class ActionEndXCommand extends ActionXCommand<Void> {
             }
         }
         else {
-            throw new PreconditionException(ErrorCode.E0812, wfAction.getPending(), wfAction.getStatusStr());
+            throw new PreconditionException(ErrorCode.E0812, wfAction.isPending(), wfAction.getStatusStr());
         }
 
         executor = Services.get().get(ActionService.class).getExecutor(wfAction.getType());
@@ -177,7 +187,7 @@ public class ActionEndXCommand extends ActionXCommand<Void> {
             } else {
                 wfAction.setRetries(0);
                 wfAction.setEndTime(new Date());
-    
+
                 boolean shouldHandleUserRetry = false;
                 Status slaStatus = null;
                 switch (wfAction.getStatus()) {
@@ -204,16 +214,16 @@ public class ActionEndXCommand extends ActionXCommand<Void> {
                 if (!shouldHandleUserRetry || !handleUserRetry(wfAction)) {
                     SLAEventBean slaEvent = SLADbXOperations.createStatusEvent(wfAction.getSlaXml(), wfAction.getId(), slaStatus, SlaAppType.WORKFLOW_ACTION);
                     LOG.debug("Queuing commands for action=" + actionId + ", status=" + wfAction.getStatus()
-                            + ", Set pending=" + wfAction.getPending());
+                            + ", Set pending=" + wfAction.isPending());
                     if(slaEvent != null) {
                         insertList.add(slaEvent);
                     }
                     queue(new SignalXCommand(jobId, actionId));
                 }
             }
-            updateList.add(wfAction);
+            updateList.add(new UpdateEntry<WorkflowActionQuery>(WorkflowActionQuery.UPDATE_ACTION_END,wfAction));
             wfJob.setLastModifiedTime(new Date());
-            updateList.add(wfJob);
+            updateList.add(new UpdateEntry<WorkflowJobQuery>(WorkflowJobQuery.UPDATE_WORKFLOW_STATUS_INSTANCE_MODIFIED, wfJob));
         }
         catch (ActionExecutorException ex) {
             LOG.warn(
@@ -248,13 +258,16 @@ public class ActionEndXCommand extends ActionXCommand<Void> {
             DagELFunctions.setActionInfo(wfInstance, wfAction);
             wfJob.setWorkflowInstance(wfInstance);
 
-            updateList.add(wfAction);
+            updateList.add(new UpdateEntry<WorkflowActionQuery>(WorkflowActionQuery.UPDATE_ACTION_END,wfAction));
             wfJob.setLastModifiedTime(new Date());
-            updateList.add(wfJob);
+            updateList.add(new UpdateEntry<WorkflowJobQuery>(WorkflowJobQuery.UPDATE_WORKFLOW_STATUS_INSTANCE_MODIFIED, wfJob));
         }
         finally {
             try {
-                jpaService.execute(new BulkUpdateInsertJPAExecutor(updateList, insertList));
+                BatchQueryExecutor.getInstance().executeBatchInsertUpdateDelete(insertList, updateList, null);
+                if (!(executor instanceof ControlNodeActionExecutor) && EventHandlerService.isEnabled()) {
+                    generateEvent(wfAction, wfJob.getUser());
+                }
             }
             catch (JPAExecutorException e) {
                 throw new CommandException(e);

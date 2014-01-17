@@ -17,12 +17,16 @@
  */
 package org.apache.oozie.executor.jpa;
 
+import java.sql.Timestamp;
+
 import javax.persistence.EntityManager;
 import javax.persistence.Query;
 
 import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.ErrorCode;
+import org.apache.oozie.StringBlob;
 import org.apache.oozie.client.CoordinatorAction;
+import org.apache.oozie.util.DateUtils;
 import org.apache.oozie.util.ParamChecker;
 
 /**
@@ -75,10 +79,16 @@ public class CoordActionGetForTimeoutJPAExecutor implements JPAExecutor<Coordina
             bean.setStatus(CoordinatorAction.Status.valueOf((String) arr[2]));
         }
         if (arr[3] != null) {
-            bean.setRunConf((String) arr[3]);
+            bean.setRunConfBlob((StringBlob) arr[3]);
         }
         if (arr[4] != null) {
             bean.setPending((Integer) arr[4]);
+        }
+        if (arr[5] != null){
+            bean.setNominalTime(DateUtils.toDate((Timestamp) arr[5]));
+        }
+        if (arr[6] != null){
+            bean.setCreatedTime(DateUtils.toDate((Timestamp) arr[6]));
         }
         return bean;
 

@@ -26,6 +26,8 @@ import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.client.Job;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor.CoordActionQuery;
 import org.apache.oozie.executor.jpa.CoordJobGetReadyActionsJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetRunningActionsCountJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
@@ -97,7 +99,6 @@ public class CoordActionReadyXCommand extends CoordinatorXCommand<Void> {
         }
         log.debug("Number of READY actions = " + actions.size());
         String user = coordJob.getUser();
-        String authToken = coordJob.getAuthToken();
         // make sure auth token is not null
         // log.denug("user=" + user + ", token=" + authToken);
         int counter = 0;
@@ -109,9 +110,11 @@ public class CoordActionReadyXCommand extends CoordinatorXCommand<Void> {
                 // change state of action to SUBMITTED
                 action.setStatus(CoordinatorAction.Status.SUBMITTED);
                 // queue action to start action
-                queue(new CoordActionStartXCommand(action.getId(), user, authToken, action.getJobId()), 100);
+                queue(new CoordActionStartXCommand(action.getId(), user, coordJob.getAppName(),
+                        action.getJobId()), 100);
                 try {
-                    jpaService.execute(new org.apache.oozie.executor.jpa.CoordActionUpdateStatusJPAExecutor(action));
+                    CoordActionQueryExecutor.getInstance().executeUpdate(
+                            CoordActionQuery.UPDATE_COORD_ACTION_STATUS_PENDING_TIME, action);
                 }
                 catch (JPAExecutorException je) {
                     throw new CommandException(je);
@@ -129,6 +132,11 @@ public class CoordActionReadyXCommand extends CoordinatorXCommand<Void> {
     @Override
     public String getEntityKey() {
         return jobId;
+    }
+
+    @Override
+    public String getKey() {
+        return getName() + "_" + jobId;
     }
 
     @Override
@@ -153,7 +161,9 @@ public class CoordActionReadyXCommand extends CoordinatorXCommand<Void> {
 
     @Override
     protected void verifyPrecondition() throws CommandException, PreconditionException {
-        if (coordJob.getStatus() != Job.Status.RUNNING && coordJob.getStatus() != Job.Status.RUNNINGWITHERROR && coordJob.getStatus() != Job.Status.SUCCEEDED && coordJob.getStatus() != Job.Status.PAUSED && coordJob.getStatus() != Job.Status.PAUSEDWITHERROR) {
+        if (coordJob.getStatus() != Job.Status.RUNNING && coordJob.getStatus() != Job.Status.RUNNINGWITHERROR
+                && coordJob.getStatus() != Job.Status.SUCCEEDED && coordJob.getStatus() != Job.Status.PAUSED
+                && coordJob.getStatus() != Job.Status.PAUSEDWITHERROR) {
             throw new PreconditionException(ErrorCode.E1100, "[" + jobId
                     + "]::CoordActionReady:: Ignoring job. Coordinator job is not in RUNNING state, but state="
                     + coordJob.getStatus());

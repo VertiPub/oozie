@@ -34,6 +34,10 @@ import org.apache.oozie.CoordinatorJobInfo;
 import org.apache.oozie.ErrorCode;
 import org.apache.oozie.client.Job.Status;
 import org.apache.oozie.client.CoordinatorJob.Timeunit;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor.CoordJobQuery;
+import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.service.InstrumentationService;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.util.DateUtils;
@@ -351,14 +355,12 @@ public class CoordinatorStore extends Store {
      * @param action Action Bean
      * @throws StoreException if action doesn't exist
      */
-    public void updateCoordinatorAction(final CoordinatorActionBean action) throws StoreException {
+    public void updateCoordinatorAction(final CoordinatorActionBean action) throws StoreException, JPAExecutorException {
         ParamChecker.notNull(action, "CoordinatorActionBean");
         doOperation("updateCoordinatorAction", new Callable<Void>() {
-            public Void call() throws StoreException {
-                Query q = entityManager.createNamedQuery("UPDATE_COORD_ACTION");
-                q.setParameter("id", action.getId());
-                setActionQueryParameters(action, q);
-                q.executeUpdate();
+            public Void call() throws StoreException, JPAExecutorException {
+                CoordActionQueryExecutor.getInstance().executeUpdate(
+                        CoordActionQueryExecutor.CoordActionQuery.UPDATE_COORD_ACTION, action);
                 return null;
             }
         });
@@ -370,17 +372,12 @@ public class CoordinatorStore extends Store {
      * @param action Action Bean
      * @throws StoreException if action doesn't exist
      */
-    public void updateCoordActionMin(final CoordinatorActionBean action) throws StoreException {
+    public void updateCoordActionMin(final CoordinatorActionBean action) throws StoreException, JPAExecutorException {
         ParamChecker.notNull(action, "CoordinatorActionBean");
         doOperation("updateCoordinatorAction", new Callable<Void>() {
-            public Void call() throws StoreException {
-                Query q = entityManager.createNamedQuery("UPDATE_COORD_ACTION_MIN");
-                q.setParameter("id", action.getId());
-                q.setParameter("missingDependencies", action.getMissingDependencies());
-                q.setParameter("lastModifiedTime", new Date());
-                q.setParameter("status", action.getStatus().toString());
-                q.setParameter("actionXml", action.getActionXml());
-                q.executeUpdate();
+            public Void call() throws StoreException, JPAExecutorException {
+                CoordActionQueryExecutor.getInstance().executeUpdate(
+                        CoordActionQueryExecutor.CoordActionQuery.UPDATE_COORD_ACTION_FOR_INPUTCHECK, action);
                 return null;
             }
         });
@@ -395,11 +392,8 @@ public class CoordinatorStore extends Store {
     public void updateCoordinatorJob(final CoordinatorJobBean job) throws StoreException {
         ParamChecker.notNull(job, "CoordinatorJobBean");
         doOperation("updateJob", new Callable<Void>() {
-            public Void call() throws StoreException {
-                Query q = entityManager.createNamedQuery("UPDATE_COORD_JOB");
-                q.setParameter("id", job.getId());
-                setJobQueryParameters(job, q);
-                q.executeUpdate();
+            public Void call() throws StoreException, JPAExecutorException {
+                CoordJobQueryExecutor.getInstance().executeUpdate(CoordJobQuery.UPDATE_COORD_JOB, job);
                 return null;
             }
         });
@@ -408,12 +402,8 @@ public class CoordinatorStore extends Store {
     public void updateCoordinatorJobStatus(final CoordinatorJobBean job) throws StoreException {
         ParamChecker.notNull(job, "CoordinatorJobBean");
         doOperation("updateJobStatus", new Callable<Void>() {
-            public Void call() throws StoreException {
-                Query q = entityManager.createNamedQuery("UPDATE_COORD_JOB_STATUS");
-                q.setParameter("id", job.getId());
-                q.setParameter("status", job.getStatus().toString());
-                q.setParameter("lastModifiedTime", new Date());
-                q.executeUpdate();
+            public Void call() throws StoreException, JPAExecutorException {
+                CoordJobQueryExecutor.getInstance().executeUpdate(CoordJobQuery.UPDATE_COORD_JOB_STATUS_MODTIME, job);
                 return null;
             }
         });
@@ -443,54 +433,6 @@ public class CoordinatorStore extends Store {
             throw new StoreException(ErrorCode.E0607, name, e.getMessage(), e);
         }
     }
-
-    private void setJobQueryParameters(CoordinatorJobBean jBean, Query q) {
-        q.setParameter("appName", jBean.getAppName());
-        q.setParameter("appPath", jBean.getAppPath());
-        q.setParameter("concurrency", jBean.getConcurrency());
-        q.setParameter("conf", jBean.getConf());
-        q.setParameter("externalId", jBean.getExternalId());
-        q.setParameter("frequency", jBean.getFrequency());
-        q.setParameter("lastActionNumber", jBean.getLastActionNumber());
-        q.setParameter("timeOut", jBean.getTimeout());
-        q.setParameter("timeZone", jBean.getTimeZone());
-        q.setParameter("authToken", jBean.getAuthToken());
-        q.setParameter("createdTime", jBean.getCreatedTimestamp());
-        q.setParameter("endTime", jBean.getEndTimestamp());
-        q.setParameter("execution", jBean.getExecution());
-        q.setParameter("jobXml", jBean.getJobXml());
-        q.setParameter("lastAction", jBean.getLastActionTimestamp());
-        q.setParameter("lastModifiedTime", new Date());
-        q.setParameter("nextMaterializedTime", jBean.getNextMaterializedTimestamp());
-        q.setParameter("origJobXml", jBean.getOrigJobXml());
-        q.setParameter("slaXml", jBean.getSlaXml());
-        q.setParameter("startTime", jBean.getStartTimestamp());
-        q.setParameter("status", jBean.getStatus().toString());
-        q.setParameter("timeUnit", jBean.getTimeUnitStr());
-    }
-
-    private void setActionQueryParameters(CoordinatorActionBean aBean, Query q) {
-        q.setParameter("actionNumber", aBean.getActionNumber());
-        q.setParameter("actionXml", aBean.getActionXml());
-        q.setParameter("consoleUrl", aBean.getConsoleUrl());
-        q.setParameter("createdConf", aBean.getCreatedConf());
-        q.setParameter("errorCode", aBean.getErrorCode());
-        q.setParameter("errorMessage", aBean.getErrorMessage());
-        q.setParameter("externalStatus", aBean.getExternalStatus());
-        q.setParameter("missingDependencies", aBean.getMissingDependencies());
-        q.setParameter("runConf", aBean.getRunConf());
-        q.setParameter("timeOut", aBean.getTimeOut());
-        q.setParameter("trackerUri", aBean.getTrackerUri());
-        q.setParameter("type", aBean.getType());
-        q.setParameter("createdTime", aBean.getCreatedTimestamp());
-        q.setParameter("externalId", aBean.getExternalId());
-        q.setParameter("jobId", aBean.getJobId());
-        q.setParameter("lastModifiedTime", new Date());
-        q.setParameter("nominalTime", aBean.getNominalTimestamp());
-        q.setParameter("slaXml", aBean.getSlaXml());
-        q.setParameter("status", aBean.getStatus().toString());
-    }
-
 
     /**
      * Purge the coordinators completed older than given days.
@@ -626,7 +568,7 @@ public class CoordinatorStore extends Store {
             bean.setConcurrency(((Integer) arr[8]).intValue());
         }
         if (arr[9] != null) {
-            bean.setFrequency(((Integer) arr[9]).intValue());
+            bean.setFrequency((String) arr[9]);
         }
         if (arr[10] != null) {
             bean.setLastActionTime((Timestamp) arr[10]);
@@ -706,31 +648,31 @@ public class CoordinatorStore extends Store {
      * @throws StoreException
      */
     public List<CoordinatorActionBean> getActionsSubsetForCoordinatorJob(final String jobId, final int start,
-                                                                         final int len) throws StoreException {
+            final int len) throws StoreException {
         ParamChecker.notEmpty(jobId, "CoordinatorJobID");
         List<CoordinatorActionBean> actions = doOperation("getActionsForCoordinatorJob",
-                                                          new Callable<List<CoordinatorActionBean>>() {
-                                                              @SuppressWarnings("unchecked")
-                                                              public List<CoordinatorActionBean> call() throws StoreException {
-                                                                  List<CoordinatorActionBean> actions;
-                                                                  List<CoordinatorActionBean> actionList = new ArrayList<CoordinatorActionBean>();
-                                                                  try {
-                                                                      Query q = entityManager.createNamedQuery("GET_ACTIONS_FOR_COORD_JOB");
-                                                                      q.setParameter("jobId", jobId);
-                                                                      q.setFirstResult(start - 1);
-                                                                      q.setMaxResults(len);
-                                                                      actions = q.getResultList();
-                                                                      for (CoordinatorActionBean a : actions) {
-                                                                          CoordinatorActionBean aa = getBeanForRunningCoordAction(a);
-                                                                          actionList.add(aa);
-                                                                      }
-                                                                  }
-                                                                  catch (IllegalStateException e) {
-                                                                      throw new StoreException(ErrorCode.E0601, e.getMessage(), e);
-                                                                  }
-                                                                  return actionList;
-                                                              }
-                                                          });
+                new Callable<List<CoordinatorActionBean>>() {
+                    @SuppressWarnings("unchecked")
+                    public List<CoordinatorActionBean> call() throws StoreException {
+                        List<CoordinatorActionBean> actions;
+                        List<CoordinatorActionBean> actionList = new ArrayList<CoordinatorActionBean>();
+                        try {
+                            Query q = entityManager.createNamedQuery("GET_ACTIONS_FOR_COORD_JOB");
+                            q.setParameter("jobId", jobId);
+                            q.setFirstResult(start - 1);
+                            q.setMaxResults(len);
+                            actions = q.getResultList();
+                            for (CoordinatorActionBean a : actions) {
+                                CoordinatorActionBean aa = getBeanForRunningCoordAction(a);
+                                actionList.add(aa);
+                            }
+                        }
+                        catch (IllegalStateException e) {
+                            throw new StoreException(ErrorCode.E0601, e.getMessage(), e);
+                        }
+                        return actionList;
+                    }
+                });
         return actions;
     }
 
@@ -739,14 +681,14 @@ public class CoordinatorStore extends Store {
             CoordinatorActionBean action = new CoordinatorActionBean();
             action.setId(a.getId());
             action.setActionNumber(a.getActionNumber());
-            action.setActionXml(a.getActionXml());
+            action.setActionXmlBlob(a.getActionXmlBlob());
             action.setConsoleUrl(a.getConsoleUrl());
-            action.setCreatedConf(a.getCreatedConf());
-            //action.setErrorCode(a.getErrorCode());
-            //action.setErrorMessage(a.getErrorMessage());
+            action.setCreatedConfBlob(a.getCreatedConfBlob());
+            // action.setErrorCode(a.getErrorCode());
+            // action.setErrorMessage(a.getErrorMessage());
             action.setExternalStatus(a.getExternalStatus());
-            action.setMissingDependencies(a.getMissingDependencies());
-            action.setRunConf(a.getRunConf());
+            action.setMissingDependenciesBlob(a.getMissingDependenciesBlob());
+            action.setRunConfBlob(a.getRunConfBlob());
             action.setTimeOut(a.getTimeOut());
             action.setTrackerUri(a.getTrackerUri());
             action.setType(a.getType());
@@ -755,7 +697,7 @@ public class CoordinatorStore extends Store {
             action.setJobId(a.getJobId());
             action.setLastModifiedTime(a.getLastModifiedTime());
             action.setNominalTime(a.getNominalTime());
-            action.setSlaXml(a.getSlaXml());
+            action.setSlaXmlBlob(a.getSlaXmlBlob());
             action.setStatus(a.getStatus());
             return action;
         }
@@ -865,8 +807,7 @@ public class CoordinatorStore extends Store {
      * @throws StoreException
      */
     public List<CoordinatorActionBean> getCoordActionsForDates(final String jobId, final Date startDate,
-            final Date endDate)
-            throws StoreException {
+            final Date endDate) throws StoreException {
         List<CoordinatorActionBean> actions = doOperation("getCoordActionsForDates",
                 new Callable<List<CoordinatorActionBean>>() {
                     @SuppressWarnings("unchecked")
@@ -878,7 +819,6 @@ public class CoordinatorStore extends Store {
                             q.setParameter("startTime", new Timestamp(startDate.getTime()));
                             q.setParameter("endTime", new Timestamp(endDate.getTime()));
                             actions = q.getResultList();
-
                             List<CoordinatorActionBean> actionList = new ArrayList<CoordinatorActionBean>();
                             for (CoordinatorActionBean a : actions) {
                                 CoordinatorActionBean aa = getBeanForRunningCoordAction(a);

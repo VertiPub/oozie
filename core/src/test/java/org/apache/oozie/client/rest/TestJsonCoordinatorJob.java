@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,6 +17,7 @@
  */
 package org.apache.oozie.client.rest;
 
+import org.apache.oozie.CoordinatorJobBean;
 import org.apache.oozie.client.CoordinatorJob;
 
 import junit.framework.TestCase;
@@ -29,14 +30,14 @@ public class TestJsonCoordinatorJob extends TestCase {
     static String END_TIME = "Sat, 05 Sep 2009 00:00:00 GMT";
 
 
-    static JsonCoordinatorJob createApplication() {
-        JsonCoordinatorJob app = new JsonCoordinatorJob();
+    static CoordinatorJobBean createApplication() {
+        CoordinatorJobBean app = new CoordinatorJobBean();
         app.setAppPath("a");
         app.setAppName("b");
         app.setId("c");
         app.setConf("cc");
         app.setStatus(CoordinatorJob.Status.PREP);
-        app.setFrequency(100);
+        app.setFrequency("100");
         app.setTimeUnit(CoordinatorJob.Timeunit.WEEK);
         app.setTimeZone("timeZone");
         app.setConcurrency(10);
@@ -53,13 +54,13 @@ public class TestJsonCoordinatorJob extends TestCase {
     }
 
     public void testProperties() {
-        JsonCoordinatorJob app = createApplication();
+        CoordinatorJobBean app = createApplication();
         assertEquals("a", app.getAppPath());
         assertEquals("b", app.getAppName());
         assertEquals("c", app.getId());
         assertEquals("cc", app.getConf());
         assertEquals(CoordinatorJob.Status.PREP, app.getStatus());
-        assertEquals(100, app.getFrequency());
+        assertEquals("100", app.getFrequency());
         assertEquals(CoordinatorJob.Timeunit.WEEK, app.getTimeUnit());
         assertEquals("timeZone", app.getTimeZone());
         assertEquals(10, app.getConcurrency());

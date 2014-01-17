@@ -17,11 +17,9 @@
  */
 package org.apache.oozie.action.hadoop;
 
-import java.io.File;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -54,43 +52,14 @@ public class TestShellActionExecutor extends ActionExecutorTestCase {
     }
 
     /**
-     * Verify if the launcher jar is created.
-     *
-     * @throws Exception
-     */
-    public void testLauncherJar() throws Exception {
-        ShellActionExecutor ae = new ShellActionExecutor();
-        Path jar = new Path(ae.getOozieRuntimeDir(), ae.getLauncherJarName());
-        assertTrue(new File(jar.toString()).exists());
-    }
-
-    /**
      * Verify if the ShellActionExecutor indeed setups the basic stuffs
      *
+     * @param launcherJarShouldExist
      * @throws Exception
      */
     public void testSetupMethods() throws Exception {
         ShellActionExecutor ae = new ShellActionExecutor();
-
-        assertEquals("shell", ae.getType());// ActionExcutor type is 'shell'
-        // Verify the launcher jar filename
-        assertEquals("shell-launcher.jar", ae.getLauncherJarName());
-
-        List<Class> classes = new ArrayList<Class>();
-        classes.add(LauncherMapper.class);
-        classes.add(LauncherSecurityManager.class);
-        classes.add(LauncherException.class);
-        classes.add(LauncherMainException.class);
-        classes.add(FileSystemActions.class);
-        classes.add(PrepareActionsDriver.class);
-        classes.add(ActionStats.class);
-        classes.add(ActionType.class);
-        classes.add(LauncherMain.class);
-        classes.add(MapReduceMain.class);
-        classes.add(ShellMain.class);
-        classes.add(ShellMain.OutputWriteThread.class);
-        assertEquals(classes, ae.getLauncherClasses());// Verify the class
-
+        assertNull(ae.getLauncherClasses());
         Element actionXml = XmlUtils.parseXml("<shell>" + "<job-tracker>" + getJobTrackerUri() + "</job-tracker>"
                 + "<name-node>" + getNameNodeUri() + "</name-node>" + "<exec>SCRIPT</exec>"
                 + "<argument>a=A</argument>" + "<argument>b=B</argument>" + "</shell>");
@@ -246,7 +215,11 @@ public class TestShellActionExecutor extends ActionExecutorTestCase {
         assertTrue(launcherJob.isSuccessful());
 
         sleep(2000);// Wait more to make sure no ID swap happens
-        assertFalse(LauncherMapper.hasIdSwap(launcherJob));
+        Configuration conf = new XConfiguration();
+        conf.set("user.name", getTestUser());
+        Map<String, String> actionData = LauncherMapperHelper.getActionData(getFileSystem(), context.getActionDir(),
+                conf);
+        assertFalse(LauncherMapperHelper.hasIdSwap(actionData));
 
         ShellActionExecutor ae = new ShellActionExecutor();
         ae.check(context, context.getAction());

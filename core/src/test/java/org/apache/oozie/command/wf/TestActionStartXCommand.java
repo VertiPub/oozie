@@ -21,6 +21,8 @@ import java.io.OutputStreamWriter;
 import java.io.StringReader;
 import java.io.Writer;
 import java.util.Date;
+import java.util.Map;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -30,7 +32,7 @@ import org.apache.hadoop.mapred.JobID;
 import org.apache.hadoop.mapred.RunningJob;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
-import org.apache.oozie.action.hadoop.LauncherMapper;
+import org.apache.oozie.action.hadoop.LauncherMapperHelper;
 import org.apache.oozie.action.hadoop.MapReduceActionExecutor;
 import org.apache.oozie.action.hadoop.MapperReducerForTest;
 import org.apache.oozie.client.OozieClient;
@@ -131,7 +133,7 @@ public class TestActionStartXCommand extends XDataTestCase {
 
         WorkflowJobBean job = this.addRecordToWfJobTable(WorkflowJob.Status.RUNNING, WorkflowInstance.Status.RUNNING);
         WorkflowActionBean action = super.addRecordToWfActionTable(job.getId(), "1", WorkflowAction.Status.PREP);
-        assertFalse(action.getPending());
+        assertFalse(action.isPending());
 
         assertNull(inst.getCounters().get(XCommand.INSTRUMENTATION_GROUP));
         ActionStartXCommand startCmd = new ActionStartXCommand(action.getId(), "map-reduce");
@@ -143,7 +145,6 @@ public class TestActionStartXCommand extends XDataTestCase {
         assertEquals(new Long(1), new Long(counterVal));
     }
 
-    @SuppressWarnings("deprecation")
     public void testActionStart() throws Exception {
         JPAService jpaService = Services.get().get(JPAService.class);
         WorkflowJobBean job = this.addRecordToWfJobTable(WorkflowJob.Status.RUNNING, WorkflowInstance.Status.RUNNING);
@@ -158,7 +159,6 @@ public class TestActionStartXCommand extends XDataTestCase {
         MapReduceActionExecutor actionExecutor = new MapReduceActionExecutor();
         JobConf conf = actionExecutor.createBaseHadoopConf(context, XmlUtils.parseXml(action.getConf()));
         String user = conf.get("user.name");
-        String group = conf.get("group.name");
         JobClient jobClient = Services.get().get(HadoopAccessorService.class).createJobClient(user, conf);
 
         String launcherId = action.getExternalId();
@@ -171,7 +171,9 @@ public class TestActionStartXCommand extends XDataTestCase {
             }
         });
         assertTrue(launcherJob.isSuccessful());
-        assertTrue(LauncherMapper.hasIdSwap(launcherJob));
+        Map<String, String> actionData = LauncherMapperHelper.getActionData(getFileSystem(), context.getActionDir(),
+                conf);
+        assertTrue(LauncherMapperHelper.hasIdSwap(actionData));
     }
 
     public void testActionReuseWfJobAppPath() throws Exception {
@@ -220,7 +222,6 @@ public class TestActionStartXCommand extends XDataTestCase {
         MapReduceActionExecutor actionExecutor = new MapReduceActionExecutor();
         JobConf conf = actionExecutor.createBaseHadoopConf(context, XmlUtils.parseXml(action.getConf()));
         String user = conf.get("user.name");
-        String group = conf.get("group.name");
         JobClient jobClient = Services.get().get(HadoopAccessorService.class).createJobClient(user, conf);
 
         String launcherId = action.getExternalId();
@@ -236,7 +237,9 @@ public class TestActionStartXCommand extends XDataTestCase {
         });
         // check if launcher job succeeds
         assertTrue(launcherJob.isSuccessful());
-        assertTrue(LauncherMapper.hasIdSwap(launcherJob));
+        Map<String, String> actionData = LauncherMapperHelper.getActionData(getFileSystem(), context.getActionDir(),
+                conf);
+        assertTrue(LauncherMapperHelper.hasIdSwap(actionData));
     }
 
     /**
@@ -258,7 +261,7 @@ public class TestActionStartXCommand extends XDataTestCase {
         conf.set(OozieClient.LOG_TOKEN, "testToken");
         conf.set(OozieClient.USER_NAME, getTestUser());
 
-        WorkflowJobBean wfBean = createWorkflow(app, conf, "auth", jobStatus, instanceStatus);
+        WorkflowJobBean wfBean = createWorkflow(app, conf, jobStatus, instanceStatus);
 
         try {
             JPAService jpaService = Services.get().get(JPAService.class);
@@ -439,7 +442,7 @@ public class TestActionStartXCommand extends XDataTestCase {
         conf.set("testCDATA",
                         "<![CDATA[?redirect=http%3A%2F%2Ftest.apache.com%2Fa-webservices%2Fv1%2FurlSigner%2FsignUrl&amp;namespace=nova.proxy&amp;keyDBHash=Vsy6n_C7K6NG0z4R2eBlKg--]]>");
 
-        WorkflowJobBean wfBean = createWorkflow(app, conf, "auth", jobStatus, instanceStatus);
+        WorkflowJobBean wfBean = createWorkflow(app, conf, jobStatus, instanceStatus);
 
         try {
             JPAService jpaService = Services.get().get(JPAService.class);

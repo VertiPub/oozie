@@ -42,11 +42,17 @@ import org.apache.oozie.command.RerunTransitionXCommand;
 import org.apache.oozie.command.bundle.BundleStatusUpdateXCommand;
 import org.apache.oozie.coord.CoordELFunctions;
 import org.apache.oozie.coord.CoordUtils;
-import org.apache.oozie.executor.jpa.BulkUpdateInsertJPAExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor.CoordActionQuery;
 import org.apache.oozie.executor.jpa.CoordJobGetJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor.CoordJobQuery;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
+import org.apache.oozie.service.EventHandlerService;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
+import org.apache.oozie.sla.SLAOperations;
+import org.apache.oozie.sla.service.SLAService;
 import org.apache.oozie.util.InstrumentUtils;
 import org.apache.oozie.util.LogUtils;
 import org.apache.oozie.util.ParamChecker;
@@ -68,6 +74,7 @@ import org.jdom.JDOMException;
  * <p/>
  * The "noCleanup" is used to indicate if user wants to cleanup output events for given rerun actions
  */
+@SuppressWarnings("deprecation")
 public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActionInfo> {
 
     private String rerunType;
@@ -113,25 +120,6 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
             }
         }
         return ret;
-    }
-
-    /**
-     * Get the list of actions for a given coordinator job
-     * @param rerunType the rerun type (date, action)
-     * @param jobId the coordinator job id
-     * @param scope the date scope or action id scope
-     * @return the list of Coordinator actions
-     * @throws CommandException
-     */
-    public static List<CoordinatorActionBean> getCoordActions(String rerunType, String jobId, String scope) throws CommandException{
-        List<CoordinatorActionBean> coordActions = null;
-        if (rerunType.equals(RestConstants.JOB_COORD_RERUN_DATE)) {
-            coordActions = CoordUtils.getCoordActionsFromDates(jobId, scope);
-        }
-        else if (rerunType.equals(RestConstants.JOB_COORD_RERUN_ACTION)) {
-            coordActions = CoordUtils.getCoordActionsFromIds(jobId, scope);
-        }
-        return coordActions;
     }
 
     /**
@@ -202,10 +190,9 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
      *
      * @param coordJob coordinator job bean
      * @param coordAction coordinator action bean
-     * @param actionXml coordinator action xml
      * @throws Exception thrown failed to update coordinator action bean or unable to write sla registration event
      */
-    private void updateAction(CoordinatorJobBean coordJob, CoordinatorActionBean coordAction, String actionXml)
+    private void updateAction(CoordinatorJobBean coordJob, CoordinatorActionBean coordAction)
             throws Exception {
         LOG.debug("updateAction for actionId=" + coordAction.getId());
         if (coordAction.getStatus() == CoordinatorAction.Status.TIMEDOUT) {
@@ -217,7 +204,7 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
         coordAction.setExternalStatus("");
         coordAction.setRerunTime(new Date());
         coordAction.setLastModifiedTime(new Date());
-        updateList.add(coordAction);
+        updateList.add(new UpdateEntry<CoordActionQuery>(CoordActionQuery.UPDATE_COORD_ACTION_RERUN, coordAction));
         writeActionRegistration(coordAction.getActionXml(), coordAction, coordJob.getUser(), coordJob.getGroup());
     }
 
@@ -318,7 +305,7 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
         try {
             CoordinatorActionInfo coordInfo = null;
             InstrumentUtils.incrJobCounter(getName(), 1, getInstrumentation());
-            List<CoordinatorActionBean> coordActions = getCoordActions(rerunType, jobId, scope);
+            List<CoordinatorActionBean> coordActions = CoordUtils.getCoordActions(rerunType, jobId, scope, false);
             if (checkAllActionsRunnable(coordActions)) {
                 for (CoordinatorActionBean coordAction : coordActions) {
                     String actionXml = coordAction.getActionXml();
@@ -329,8 +316,10 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
                     if (refresh) {
                         refreshAction(coordJob, coordAction);
                     }
-                    updateAction(coordJob, coordAction, actionXml);
-
+                    updateAction(coordJob, coordAction);
+                    if (SLAService.isEnabled()) {
+                        SLAOperations.updateRegistrationEvent(coordAction.getId());
+                    }
                     queue(new CoordActionNotificationXCommand(coordAction), 100);
                     queue(new CoordActionInputCheckXCommand(coordAction.getId(), coordAction.getJobId()), 100);
                 }
@@ -393,8 +382,7 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
                 coordJob.resetPending();
             }
         }
-
-        updateList.add(coordJob);
+        updateList.add(new UpdateEntry<CoordJobQuery>(CoordJobQuery.UPDATE_COORD_JOB_STATUS_PENDING, coordJob));
     }
 
     /* (non-Javadoc)
@@ -403,7 +391,10 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
     @Override
     public void performWrites() throws CommandException {
         try {
-            jpaService.execute(new BulkUpdateInsertJPAExecutor(updateList, insertList));
+            BatchQueryExecutor.getInstance().executeBatchInsertUpdateDelete(insertList, updateList, null);
+            if (EventHandlerService.isEnabled()) {
+                generateEvents(coordJob);
+            }
         }
         catch (JPAExecutorException e) {
             throw new CommandException(e);

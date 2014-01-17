@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -37,10 +37,12 @@ import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
 import org.apache.oozie.command.StartTransitionXCommand;
 import org.apache.oozie.command.coord.CoordSubmitXCommand;
-import org.apache.oozie.executor.jpa.BulkUpdateInsertJPAExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
 import org.apache.oozie.executor.jpa.BundleJobGetJPAExecutor;
-import org.apache.oozie.executor.jpa.BundleJobUpdateJPAExecutor;
+import org.apache.oozie.executor.jpa.BundleJobQueryExecutor;
+import org.apache.oozie.executor.jpa.BundleJobQueryExecutor.BundleJobQuery;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.util.JobUtils;
@@ -87,6 +89,11 @@ public class BundleStartXCommand extends StartTransitionXCommand {
     @Override
     public String getEntityKey() {
         return jobId;
+    }
+
+    @Override
+    public String getKey() {
+        return getName() + "_" + jobId;
     }
 
     /* (non-Javadoc)
@@ -171,7 +178,7 @@ public class BundleStartXCommand extends StartTransitionXCommand {
     @Override
     public void performWrites() throws CommandException {
         try {
-            jpaService.execute(new BulkUpdateInsertJPAExecutor(updateList, insertList));
+            BatchQueryExecutor.getInstance().executeBatchInsertUpdateDelete(insertList, updateList, null);
         }
         catch (JPAExecutorException e) {
             throw new CommandException(e);
@@ -217,7 +224,7 @@ public class BundleStartXCommand extends StartTransitionXCommand {
                 bundleJob.setStatus(Job.Status.FAILED);
                 bundleJob.resetPending();
                 try {
-                    jpaService.execute(new BundleJobUpdateJPAExecutor(bundleJob));
+                    BundleJobQueryExecutor.getInstance().executeUpdate(BundleJobQuery.UPDATE_BUNDLE_JOB_STATUS_PENDING, bundleJob);
                 }
                 catch (JPAExecutorException jex) {
                     throw new CommandException(jex);
@@ -269,7 +276,7 @@ public class BundleStartXCommand extends StartTransitionXCommand {
                     Configuration coordConf = mergeConfig(coordElem);
                     coordConf.set(OozieClient.BUNDLE_ID, jobId);
 
-                    queue(new CoordSubmitXCommand(coordConf, bundleJob.getAuthToken(), bundleJob.getId(), name.getValue()));
+                    queue(new CoordSubmitXCommand(coordConf, bundleJob.getId(), name.getValue()));
 
                 }
                 updateBundleAction();
@@ -360,6 +367,6 @@ public class BundleStartXCommand extends StartTransitionXCommand {
      */
     @Override
     public void updateJob() throws CommandException {
-        updateList.add(bundleJob);
+        updateList.add(new UpdateEntry<BundleJobQuery>(BundleJobQuery.UPDATE_BUNDLE_JOB_STATUS_PENDING, bundleJob));
     }
 }

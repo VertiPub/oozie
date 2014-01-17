@@ -18,7 +18,6 @@
 package org.apache.oozie.service;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -30,7 +29,6 @@ import java.util.Comparator;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.BundleActionBean;
 import org.apache.oozie.BundleJobBean;
-import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.CoordinatorJobBean;
 import org.apache.oozie.ErrorCode;
 import org.apache.oozie.client.CoordinatorAction;
@@ -39,20 +37,21 @@ import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.bundle.BundleKillXCommand;
 import org.apache.oozie.command.bundle.BundleStatusUpdateXCommand;
 import org.apache.oozie.executor.jpa.BundleActionsGetByLastModifiedTimeJPAExecutor;
-import org.apache.oozie.executor.jpa.BundleActionsGetJPAExecutor;
 import org.apache.oozie.executor.jpa.BundleActionsGetStatusPendingJPAExecutor;
 import org.apache.oozie.executor.jpa.BundleJobGetJPAExecutor;
-import org.apache.oozie.executor.jpa.BundleJobUpdateJPAExecutor;
+import org.apache.oozie.executor.jpa.BundleJobQueryExecutor;
+import org.apache.oozie.executor.jpa.BundleJobQueryExecutor.BundleJobQuery;
 import org.apache.oozie.executor.jpa.BundleJobsGetRunningOrPendingJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordActionsGetByLastModifiedTimeJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetActionsStatusJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetPendingActionsCountJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordJobUpdateJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor.CoordJobQuery;
 import org.apache.oozie.executor.jpa.CoordJobsGetPendingJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.util.DateUtils;
-import org.apache.oozie.util.MemoryLocks;
+import org.apache.oozie.lock.LockToken;
 import org.apache.oozie.util.StatusUtils;
 import org.apache.oozie.util.XLog;
 
@@ -79,9 +78,9 @@ public class StatusTransitService implements Service {
      * (job done), we reset the job's pending flag to 0. If all child actions are succeeded, we set the job's status to
      * SUCCEEDED.
      */
-    static class StatusTransitRunnable implements Runnable {
+    public static class StatusTransitRunnable implements Runnable {
         private JPAService jpaService = null;
-        private MemoryLocks.LockToken lock;
+        private LockToken lock;
 
         public StatusTransitRunnable() {
             jpaService = Services.get().get(JPAService.class);
@@ -640,7 +639,7 @@ public class StatusTransitService implements Service {
                 bundleJob.resetPending();
                 LOG.info("Bundle job [" + jobId + "] Pending set to FALSE");
             }
-            jpaService.execute(new BundleJobUpdateJPAExecutor(bundleJob));
+            BundleJobQueryExecutor.getInstance().executeUpdate(BundleJobQuery.UPDATE_BUNDLE_JOB_STATUS_PENDING_MODTIME, bundleJob);
         }
 
         private void updateCoordJob(boolean isPending, CoordinatorJobBean coordJob, Job.Status coordStatus)
@@ -656,14 +655,17 @@ public class StatusTransitService implements Service {
                 }
             }
 
-            checkCoordPending(isPending, coordJob, false);
+            boolean isPendingStateChanged = checkCoordPending(isPending, coordJob, false);
             // Check for backward support when RUNNINGWITHERROR, SUSPENDEDWITHERROR and PAUSEDWITHERROR is
             // not supported
             coordJob.setStatus(StatusUtils.getStatusIfBackwardSupportTrue(coordStatus));
             // Backward support when coordinator namespace is 0.1
             coordJob.setStatus(StatusUtils.getStatus(coordJob));
-            coordJob.setLastModifiedTime(new Date());
-            jpaService.execute(new CoordJobUpdateJPAExecutor(coordJob));
+            if (coordJob.getStatus() != prevStatus || isPendingStateChanged) {
+                LOG.debug("Updating coord job " + coordJob.getId());
+                coordJob.setLastModifiedTime(new Date());
+                CoordJobQueryExecutor.getInstance().executeUpdate(CoordJobQuery.UPDATE_COORD_JOB_STATUS_PENDING_MODTIME, coordJob);
+            }
             // update bundle action only when status changes in coord job
             if (coordJob.getBundleId() != null) {
                 if (!prevStatus.equals(coordJob.getStatus())) {
@@ -673,8 +675,10 @@ public class StatusTransitService implements Service {
             }
         }
 
-        private void checkCoordPending(boolean isPending, CoordinatorJobBean coordJob, boolean saveToDB) throws JPAExecutorException {
+        private boolean checkCoordPending(boolean isPending, CoordinatorJobBean coordJob, boolean saveToDB)
+                throws JPAExecutorException {
             // Checking the coordinator pending should be updated or not
+            boolean prevPending = coordJob.isPending();
             if (isPending) {
                 coordJob.setPending();
                 LOG.info("Coord job [" + coordJob.getId() + "] Pending set to TRUE");
@@ -683,10 +687,12 @@ public class StatusTransitService implements Service {
                 coordJob.resetPending();
                 LOG.info("Coord job [" + coordJob.getId() + "] Pending set to FALSE");
             }
-
-            if (saveToDB) {
-                jpaService.execute(new CoordJobUpdateJPAExecutor(coordJob));
+            boolean hasChange = prevPending != coordJob.isPending();
+            if (saveToDB && hasChange) {
+                CoordJobQueryExecutor.getInstance().executeUpdate(CoordJobQuery.UPDATE_COORD_JOB_STATUS_PENDING_MODTIME, coordJob);
             }
+            return hasChange;
+
         }
 
         /**

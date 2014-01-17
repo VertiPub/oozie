@@ -29,17 +29,13 @@ import org.json.simple.JSONValue;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.List;
-import java.util.Enumeration;
 import java.util.concurrent.Callable;
-import javax.imageio.ImageIO;
-import junit.framework.Assert;
-import org.apache.oozie.ErrorCode;
 
 public class TestV1JobServlet extends DagServletTestCase {
 
@@ -223,7 +219,7 @@ public class TestV1JobServlet extends DagServletTestCase {
                 MockCoordinatorEngineService.reset();
                 params = new HashMap<String, String>();
                 params.put(RestConstants.JOB_SHOW_PARAM, RestConstants.JOB_SHOW_INFO);
-                params.put(RestConstants.OFFSET_PARAM, "1");
+                params.put(RestConstants.OFFSET_PARAM, "2");
                 params.put(RestConstants.LEN_PARAM, "50");
                 url = createURL(MockCoordinatorEngineService.JOB_ID + 1, params);
                 conn = (HttpURLConnection) url.openConnection();
@@ -233,6 +229,40 @@ public class TestV1JobServlet extends DagServletTestCase {
                 obj = (JSONObject) JSONValue.parse(new InputStreamReader(conn.getInputStream()));
                 assertEquals(MockCoordinatorEngineService.JOB_ID + 1, obj.get(JsonTags.COORDINATOR_JOB_ID));
                 assertEquals(RestConstants.JOB_SHOW_INFO, MockCoordinatorEngineService.did);
+                assertEquals(MockCoordinatorEngineService.offset, new Integer(2));
+                assertEquals(MockCoordinatorEngineService.length, new Integer(50));
+
+                MockCoordinatorEngineService.reset();
+                params = new HashMap<String, String>();
+                params.put(RestConstants.JOB_SHOW_PARAM, RestConstants.JOB_SHOW_INFO);
+                params.put(RestConstants.OFFSET_PARAM, "-1"); //OozieCLI
+                params.put(RestConstants.LEN_PARAM, "-1");
+                url = createURL(MockCoordinatorEngineService.JOB_ID + 1, params);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                assertEquals(HttpServletResponse.SC_OK, conn.getResponseCode());
+                assertTrue(conn.getHeaderField("content-type").startsWith(RestConstants.JSON_CONTENT_TYPE));
+                obj = (JSONObject) JSONValue.parse(new InputStreamReader(conn.getInputStream()));
+                assertEquals(MockCoordinatorEngineService.JOB_ID + 1, obj.get(JsonTags.COORDINATOR_JOB_ID));
+                assertEquals(RestConstants.JOB_SHOW_INFO, MockCoordinatorEngineService.did);
+                assertEquals(MockCoordinatorEngineService.offset, new Integer(1));
+                assertEquals(MockCoordinatorEngineService.length, new Integer(1000));
+
+                MockCoordinatorEngineService.reset();
+                params = new HashMap<String, String>();
+                params.put(RestConstants.JOB_SHOW_PARAM, RestConstants.JOB_SHOW_INFO);
+                params.put(RestConstants.OFFSET_PARAM, "0");  //oozie-console.js
+                params.put(RestConstants.LEN_PARAM, "0");
+                url = createURL(MockCoordinatorEngineService.JOB_ID + 1, params);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                assertEquals(HttpServletResponse.SC_OK, conn.getResponseCode());
+                assertTrue(conn.getHeaderField("content-type").startsWith(RestConstants.JSON_CONTENT_TYPE));
+                obj = (JSONObject) JSONValue.parse(new InputStreamReader(conn.getInputStream()));
+                assertEquals(MockCoordinatorEngineService.JOB_ID + 1, obj.get(JsonTags.COORDINATOR_JOB_ID));
+                assertEquals(RestConstants.JOB_SHOW_INFO, MockCoordinatorEngineService.did);
+                assertEquals(MockCoordinatorEngineService.offset, new Integer(1));
+                assertEquals(MockCoordinatorEngineService.length, new Integer(0));
 
                 MockCoordinatorEngineService.reset();
                 params = new HashMap<String, String>();
@@ -302,6 +332,48 @@ public class TestV1JobServlet extends DagServletTestCase {
                 conn.setDoOutput(true);
                 assertEquals(HttpServletResponse.SC_BAD_REQUEST, conn.getResponseCode());
                 assertEquals(RestConstants.JOB_ACTION_CHANGE, MockCoordinatorEngineService.did);
+
+                return null;
+            }
+        });
+    }
+
+    /**
+     * Test Coord Action kill feature via REST API
+     * @throws Exception
+     */
+    public void testCoordActionKill() throws Exception {
+        runTest("/v1/job/*", V1JobServlet.class, IS_SECURITY_ENABLED, new Callable<Void>() {
+            public Void call() throws Exception {
+                MockCoordinatorEngineService.reset();
+                Map<String, String> params = new HashMap<String, String>();
+                params.put(RestConstants.ACTION_PARAM, RestConstants.JOB_ACTION_KILL);
+                String rangeType = "action";
+                params.put(RestConstants.JOB_COORD_RANGE_TYPE_PARAM, rangeType);
+                String scope = "1-3";
+                params.put(RestConstants.JOB_COORD_SCOPE_PARAM, scope);
+                URL url = createURL(MockCoordinatorEngineService.JOB_ID + 1, params);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("PUT");
+                conn.setRequestProperty("content-type", RestConstants.XML_CONTENT_TYPE);
+                conn.setDoOutput(true);
+                assertEquals(HttpServletResponse.SC_OK, conn.getResponseCode());
+                assertEquals(RestConstants.JOB_ACTION_KILL, MockCoordinatorEngineService.did);
+
+                MockCoordinatorEngineService.reset();
+                params = new HashMap<String, String>();
+                params.put(RestConstants.ACTION_PARAM, RestConstants.JOB_ACTION_KILL);
+                rangeType = "date";
+                params.put(RestConstants.JOB_COORD_RANGE_TYPE_PARAM, rangeType);
+                scope = "2009-12-15T01:00Z::2009-12-16T01:00Z, 2009-12-20T01:00Z";
+                params.put(RestConstants.JOB_COORD_SCOPE_PARAM, scope);
+                url = createURL(MockCoordinatorEngineService.JOB_ID + 1, params);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("PUT");
+                conn.setRequestProperty("content-type", RestConstants.XML_CONTENT_TYPE);
+                conn.setDoOutput(true);
+                assertEquals(HttpServletResponse.SC_OK, conn.getResponseCode());
+                assertEquals(RestConstants.JOB_ACTION_KILL, MockCoordinatorEngineService.did);
 
                 return null;
             }

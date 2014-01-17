@@ -149,6 +149,7 @@ public enum ErrorCode {
     E0741(XLog.STD, "Cycle detected transitioning to [{0}] via path {1}"),
     E0742(XLog.STD, "No Fork for Join [{0}] to pair with"),
     E0743(XLog.STD, "Multiple \"ok to\" transitions to the same node, [{0}], are not allowed"),
+    E0744(XLog.STD, "A fork, [{0}], is not allowed to have multiple transitions to the same node, [{1}]"),
 
     E0800(XLog.STD, "Action it is not running its in [{1}] state, action [{0}]"),
     E0801(XLog.STD, "Workflow already running, workflow [{0}]"),
@@ -177,6 +178,8 @@ public enum ErrorCode {
     E0902(XLog.OPS, "Exception occured: [{0}]"),
     E0903(XLog.OPS, "Invalid JobConf, it has not been created by HadoopAccessorService"),
     E0904(XLog.STD, "Scheme [{0}] not supported in uri [{1}]"),
+    E0905(XLog.STD, "Scheme not present in uri [{0}]"),
+    E0906(XLog.STD, "URI parsing error : {0}"),
 
     E1001(XLog.STD, "Could not read the coordinator job definition, {0}"),
     E1002(XLog.STD, "Invalid coordinator application URI [{0}], {1}"),
@@ -184,7 +187,7 @@ public enum ErrorCode {
     E1004(XLog.STD, "Expression language evaluation error, {0}"),
     E1005(XLog.STD, "Could not read the coordinator job configuration read from DB, {0}"),
     E1006(XLog.STD, "Invalid coordinator application [{0}], {1}"),
-    E1007(XLog.STD, "Unable to add record to SLA table. [{0}], {1}"),
+    E1007(XLog.STD, "Unable to add record for SLA. [{0}], {1}"),
     E1008(XLog.STD, "Not implemented. [{0}]"),
     E1009(XLog.STD, "Unable to parse XML response. [{0}]"),
     E1010(XLog.STD, "Invalid data in coordinator xml. [{0}]"),
@@ -203,8 +206,7 @@ public enum ErrorCode {
 
     E1100(XLog.STD, "Command precondition does not hold before execution, [{0}]"),
 
-    E1101(XLog.STD, "SLA Nominal time is required."),
-    E1102(XLog.STD, "SLA should-start can't be empty."),
+    E1101(XLog.STD, "SLA <{0}> cannot be empty."),
 
     E1201(XLog.STD, "State [{0}] is invalid for job [{1}]."),
 
@@ -230,6 +232,12 @@ public enum ErrorCode {
 
     E1400(XLog.STD, "doAs (proxyuser) failure"),
 
+    E1501(XLog.STD, "Error in getting HCat Access [{0}]"),
+
+    E1601(XLog.STD, "Cannot retrieve JMS connection info [{0}]"),
+    E1602(XLog.STD, "Cannot retrieve Topic name [{0}]"),
+
+    E1700(XLog.STD, "Issue communicating with ZooKeeper: {0}"),
     ETEST(XLog.STD, "THIS SHOULD HAPPEN ONLY IN TESTING, invalid job id [{0}]"),;
 
     private String template;

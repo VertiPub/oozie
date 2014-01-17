@@ -25,8 +25,6 @@ import java.util.Date;
 
 import javax.persistence.Basic;
 import javax.persistence.Column;
-import javax.persistence.DiscriminatorColumn;
-import javax.persistence.DiscriminatorType;
 import javax.persistence.Entity;
 import javax.persistence.Id;
 import javax.persistence.NamedQueries;
@@ -42,13 +40,18 @@ import org.json.simple.JSONObject;
 
 @Entity
 @Table(name = "BUNDLE_ACTIONS")
-@DiscriminatorColumn(name = "bean_type", discriminatorType = DiscriminatorType.STRING)
 @NamedQueries( {
         @NamedQuery(name = "DELETE_BUNDLE_ACTION", query = "delete from BundleActionBean w where w.bundleActionId = :bundleActionId"),
 
+        @NamedQuery(name = "UPDATE_BUNDLE_ACTION_PENDING_MODTIME", query = "update BundleActionBean w set w.lastModifiedTimestamp = :lastModifiedTimestamp, w.pending = :pending where w.bundleActionId = :bundleActionId"),
+
+        @NamedQuery(name = "UPDATE_BUNDLE_ACTION_STATUS_PENDING_MODTIME", query = "update BundleActionBean w set w.statusStr = :status, w.lastModifiedTimestamp = :lastModifiedTimestamp, w.pending = :pending where w.bundleActionId = :bundleActionId"),
+
+        @NamedQuery(name = "UPDATE_BUNDLE_ACTION_STATUS_PENDING_MODTIME_COORDID", query = "update BundleActionBean w set w.statusStr = :status, w.lastModifiedTimestamp = :lastModifiedTimestamp, w.pending = :pending, w.coordId = :coordId where w.bundleActionId = :bundleActionId"),
+
         @NamedQuery(name = "GET_BUNDLE_ACTIONS_FOR_BUNDLE", query = "select OBJECT(w) from BundleActionBean w where w.bundleId = :bundleId"),
 
-        @NamedQuery(name = "GET_BUNDLE_ACTION_STATUS_PENDING_FOR_BUNDLE", query = "select w.coordId, w.status, w.pending from BundleActionBean w where w.bundleId = :bundleId"),
+        @NamedQuery(name = "GET_BUNDLE_ACTION_STATUS_PENDING_FOR_BUNDLE", query = "select w.coordId, w.statusStr, w.pending from BundleActionBean w where w.bundleId = :bundleId"),
 
         @NamedQuery(name = "GET_BUNDLE_ACTIONS", query = "select OBJECT(w) from BundleActionBean w"),
 
@@ -64,15 +67,17 @@ import org.json.simple.JSONObject;
 
         @NamedQuery(name = "GET_BUNDLE_ACTIONS_PENDING_TRUE_COUNT", query = "select count(w) from BundleActionBean w where w.bundleId = :bundleId AND w.pending > 0"),
 
-        @NamedQuery(name = "GET_BUNDLE_ACTIONS_NOT_EQUAL_STATUS_COUNT", query = "select count(w) from BundleActionBean w where w.bundleId = :bundleId AND w.status <> :status"),
+        @NamedQuery(name = "GET_BUNDLE_ACTIONS_NOT_EQUAL_STATUS_COUNT", query = "select count(w) from BundleActionBean w where w.bundleId = :bundleId AND w.statusStr <> :status"),
 
-        @NamedQuery(name = "GET_BUNDLE_ACTIONS_NOT_TERMINATE_STATUS_COUNT", query = "select count(w) from BundleActionBean w where w.bundleId = :bundleId AND (w.status = 'PREP' OR w.status = 'RUNNING' OR w.status = 'RUNNINGWITHERROR' OR w.status = 'SUSPENDED' OR w.status = 'SUSPENDEDWITHERROR' OR w.status = 'PREPSUSPENDED' OR w.status = 'PAUSED' OR  w.status = 'PAUSEDWITHERROR' OR w.status = 'PREPPAUSED')"),
+        @NamedQuery(name = "GET_BUNDLE_ACTIONS_NOT_TERMINATE_STATUS_COUNT", query = "select count(w) from BundleActionBean w where w.bundleId = :bundleId AND (w.statusStr = 'PREP' OR w.statusStr = 'RUNNING' OR w.statusStr = 'RUNNINGWITHERROR' OR w.statusStr = 'SUSPENDED' OR w.statusStr = 'SUSPENDEDWITHERROR' OR w.statusStr = 'PREPSUSPENDED' OR w.statusStr = 'PAUSED' OR  w.statusStr = 'PAUSEDWITHERROR' OR w.statusStr = 'PREPPAUSED')"),
 
-        @NamedQuery(name = "GET_BUNDLE_ACTIONS_FAILED_NULL_COORD_COUNT", query = "select count(w) from BundleActionBean w where w.bundleId = :bundleId AND w.status = 'FAILED' AND w.coordId IS NULL"),
+        @NamedQuery(name = "GET_BUNDLE_ACTIONS_FAILED_NULL_COORD_COUNT", query = "select count(w) from BundleActionBean w where w.bundleId = :bundleId AND w.statusStr = 'FAILED' AND w.coordId IS NULL"),
 
         @NamedQuery(name = "GET_BUNDLE_ACTIONS_OLDER_THAN", query = "select OBJECT(w) from BundleActionBean w order by w.lastModifiedTimestamp"),
 
-        @NamedQuery(name = "DELETE_COMPLETED_ACTIONS_FOR_BUNDLE", query = "delete from BundleActionBean a where a.bundleId = :bundleId and (a.status = 'SUCCEEDED' OR a.status = 'FAILED' OR a.status= 'KILLED' OR a.status = 'DONEWITHERROR')")})
+        @NamedQuery(name = "DELETE_COMPLETED_ACTIONS_FOR_BUNDLE", query = "delete from BundleActionBean a where a.bundleId = :bundleId and (a.statusStr = 'SUCCEEDED' OR a.statusStr = 'FAILED' OR a.statusStr= 'KILLED' OR a.statusStr = 'DONEWITHERROR')"),
+
+        @NamedQuery(name = "DELETE_ACTIONS_FOR_BUNDLE", query = "delete from BundleActionBean a where a.bundleId = :bundleId")})
 public class BundleActionBean implements Writable, JsonBean {
 
     @Id
@@ -91,7 +96,7 @@ public class BundleActionBean implements Writable, JsonBean {
 
     @Basic
     @Column(name = "status")
-    private String status = null;
+    private String statusStr = null;
 
     @Basic
     @Column(name = "critical")
@@ -183,7 +188,7 @@ public class BundleActionBean implements Writable, JsonBean {
      * @return status object
      */
     public Status getStatus() {
-        return Status.valueOf(this.status);
+        return Status.valueOf(this.statusStr);
     }
 
     /**
@@ -192,7 +197,16 @@ public class BundleActionBean implements Writable, JsonBean {
      * @return status string
      */
     public String getStatusStr() {
-        return status;
+        return statusStr;
+    }
+
+    /**
+     * Set the Status of the Bundle Action
+     *
+     * @return status string
+     */
+    public void setStatusStr(String statusStr) {
+        this.statusStr = statusStr;
     }
 
     /**
@@ -201,7 +215,7 @@ public class BundleActionBean implements Writable, JsonBean {
      * @param val
      */
     public void setStatus(Status val) {
-        this.status = val.toString();
+        this.statusStr = val.toString();
     }
 
     /**
@@ -333,9 +347,6 @@ public class BundleActionBean implements Writable, JsonBean {
         return lastModifiedTimestamp;
     }
 
-    /* (non-Javadoc)
-     * @see org.apache.hadoop.io.Writable#write(java.io.DataOutput)
-     */
     @Override
     public void write(DataOutput dataOutput) throws IOException {
         WritableUtils.writeStr(dataOutput, getBundleActionId());
@@ -348,9 +359,6 @@ public class BundleActionBean implements Writable, JsonBean {
         dataOutput.writeLong((getLastModifiedTimestamp() != null) ? getLastModifiedTimestamp().getTime() : -1);
     }
 
-    /* (non-Javadoc)
-     * @see org.apache.hadoop.io.Writable#readFields(java.io.DataInput)
-     */
     @Override
     public void readFields(DataInput dataInput) throws IOException {
         setBundleActionId(WritableUtils.readStr(dataInput));

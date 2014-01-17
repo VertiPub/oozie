@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -73,7 +73,7 @@ public abstract class ActionExecutorTestCase extends XFsTestCase {
         super.tearDown();
     }
 
-    protected class Context implements ActionExecutor.Context {
+    public class Context implements ActionExecutor.Context {
         private WorkflowActionBean action;
         private WorkflowJobBean workflow;
         boolean started;
@@ -236,7 +236,7 @@ public abstract class ActionExecutorTestCase extends XFsTestCase {
         wfConf.set(OozieClient.APP_PATH, appUri.toString());
 
 
-        WorkflowJobBean workflow = createWorkflow(app, wfConf, protoConf, "auth");
+        WorkflowJobBean workflow = createWorkflow(app, wfConf, protoConf);
 
         WorkflowActionBean action = new WorkflowActionBean();
         action.setName(actionName);
@@ -270,7 +270,7 @@ public abstract class ActionExecutorTestCase extends XFsTestCase {
         wfConf.set(OozieClient.APP_PATH, appUri.toString());
 
 
-        WorkflowJobBean workflow = createWorkflow(app, wfConf, protoConf, "auth");
+        WorkflowJobBean workflow = createWorkflow(app, wfConf, protoConf);
 
         WorkflowActionBean action = new WorkflowActionBean();
         action.setName(actionName);
@@ -280,8 +280,8 @@ public abstract class ActionExecutorTestCase extends XFsTestCase {
         return workflow;
     }
 
-    private WorkflowJobBean createWorkflow(WorkflowApp app, Configuration conf, XConfiguration protoConf,
-            String authToken) throws Exception {
+    private WorkflowJobBean createWorkflow(WorkflowApp app, Configuration conf, XConfiguration protoConf)
+            throws Exception {
         WorkflowLib workflowLib = Services.get().get(WorkflowStoreService.class).getWorkflowLibWithNoDB();
         WorkflowInstance wfInstance;
         wfInstance = workflowLib.createInstance(app, conf);
@@ -297,7 +297,6 @@ public abstract class ActionExecutorTestCase extends XFsTestCase {
         workflow.setRun(0);
         workflow.setUser(conf.get(OozieClient.USER_NAME));
         workflow.setGroup(conf.get(OozieClient.GROUP_NAME));
-        workflow.setAuthToken(authToken);
         workflow.setWorkflowInstance(wfInstance);
         return workflow;
     }

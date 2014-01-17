@@ -32,27 +32,36 @@ import java.util.Set;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.oozie.AppType;
 import org.apache.oozie.ErrorCode;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
+import org.apache.oozie.action.oozie.SubWorkflowActionExecutor;
 import org.apache.oozie.client.OozieClient;
 import org.apache.oozie.client.WorkflowAction;
 import org.apache.oozie.client.WorkflowJob;
 import org.apache.oozie.client.rest.JsonBean;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
-import org.apache.oozie.executor.jpa.BulkUpdateDeleteJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.executor.jpa.WorkflowActionsGetForJobJPAExecutor;
 import org.apache.oozie.executor.jpa.WorkflowJobGetJPAExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
+import org.apache.oozie.executor.jpa.WorkflowJobQueryExecutor.WorkflowJobQuery;
 import org.apache.oozie.service.DagXLogInfoService;
 import org.apache.oozie.service.HadoopAccessorException;
 import org.apache.oozie.service.HadoopAccessorService;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
+import org.apache.oozie.service.UUIDService;
 import org.apache.oozie.service.WorkflowAppService;
 import org.apache.oozie.service.WorkflowStoreService;
+import org.apache.oozie.sla.SLAOperations;
+import org.apache.oozie.sla.service.SLAService;
 import org.apache.oozie.util.ConfigUtils;
+import org.apache.oozie.util.ELEvaluator;
+import org.apache.oozie.util.ELUtils;
 import org.apache.oozie.util.InstrumentUtils;
 import org.apache.oozie.util.LogUtils;
 import org.apache.oozie.util.ParamChecker;
@@ -65,6 +74,8 @@ import org.apache.oozie.workflow.WorkflowException;
 import org.apache.oozie.workflow.WorkflowInstance;
 import org.apache.oozie.workflow.WorkflowLib;
 import org.apache.oozie.workflow.lite.NodeHandler;
+import org.jdom.Element;
+import org.jdom.JDOMException;
 
 /**
  * This is a RerunXCommand which is used for rerunn.
@@ -73,13 +84,12 @@ import org.apache.oozie.workflow.lite.NodeHandler;
 public class ReRunXCommand extends WorkflowXCommand<Void> {
     private final String jobId;
     private Configuration conf;
-    private final String authToken;
     private final Set<String> nodesToSkip = new HashSet<String>();
     public static final String TO_SKIP = "TO_SKIP";
     private WorkflowJobBean wfBean;
     private List<WorkflowActionBean> actions;
     private JPAService jpaService;
-    private List<JsonBean> updateList = new ArrayList<JsonBean>();
+    private List<UpdateEntry> updateList = new ArrayList<UpdateEntry>();
     private List<JsonBean> deleteList = new ArrayList<JsonBean>();
 
     private static final Set<String> DISALLOWED_DEFAULT_PROPERTIES = new HashSet<String>();
@@ -97,11 +107,10 @@ public class ReRunXCommand extends WorkflowXCommand<Void> {
         PropertiesUtils.createPropertySet(badDefaultProps, DISALLOWED_DEFAULT_PROPERTIES);
     }
 
-    public ReRunXCommand(String jobId, Configuration conf, String authToken) {
+    public ReRunXCommand(String jobId, Configuration conf) {
         super("rerun", "rerun", 1);
         this.jobId = ParamChecker.notEmpty(jobId, "jobId");
         this.conf = ParamChecker.notNull(conf, "conf");
-        this.authToken = ParamChecker.notEmpty(authToken, "authToken");
     }
 
     /* (non-Javadoc)
@@ -118,8 +127,8 @@ public class ReRunXCommand extends WorkflowXCommand<Void> {
         WorkflowAppService wps = Services.get().get(WorkflowAppService.class);
         try {
             XLog.Info.get().setParameter(DagXLogInfoService.TOKEN, conf.get(OozieClient.LOG_TOKEN));
-            WorkflowApp app = wps.parseDef(conf, authToken);
-            XConfiguration protoActionConf = wps.createProtoActionConf(conf, authToken, true);
+            WorkflowApp app = wps.parseDef(conf);
+            XConfiguration protoActionConf = wps.createProtoActionConf(conf, true);
             WorkflowLib workflowLib = Services.get().get(WorkflowStoreService.class).getWorkflowLibWithNoDB();
 
             appPath = conf.get(OozieClient.APP_PATH);
@@ -156,6 +165,20 @@ public class ReRunXCommand extends WorkflowXCommand<Void> {
             catch (WorkflowException e) {
                 throw new CommandException(e);
             }
+
+            if (SLAService.isEnabled()) {
+                Element wfElem = XmlUtils.parseXml(app.getDefinition());
+                ELEvaluator evalSla = SubmitXCommand.createELEvaluatorForGroup(conf, "wf-sla-submit");
+                Element eSla = XmlUtils.getSLAElement(wfElem);
+                String jobSlaXml = null;
+                if (eSla != null) {
+                    jobSlaXml = SubmitXCommand.resolveSla(eSla, evalSla);
+                }
+                String appName = ELUtils.resolveAppName(app.getName(), conf);
+                writeSLARegistration(wfElem, jobSlaXml, newWfInstance.getId(),
+                            conf.get(SubWorkflowActionExecutor.PARENT_ID), conf.get(OozieClient.USER_NAME), appName,
+                            evalSla);
+            }
             wfBean.setAppName(app.getName());
             wfBean.setProtoActionConf(protoActionConf.toXmlString());
         }
@@ -170,6 +193,9 @@ public class ReRunXCommand extends WorkflowXCommand<Void> {
         }
         catch (URISyntaxException ex) {
             throw new CommandException(ErrorCode.E0711, appPath, ex.getMessage(), ex);
+        }
+        catch (Exception ex) {
+            throw new CommandException(ErrorCode.E1007, ex.getMessage(), ex);
         }
 
         for (int i = 0; i < actions.size(); i++) {
@@ -196,15 +222,42 @@ public class ReRunXCommand extends WorkflowXCommand<Void> {
 
         try {
             wfBean.setLastModifiedTime(new Date());
-            updateList.add(wfBean);
+            updateList.add(new UpdateEntry<WorkflowJobQuery>(WorkflowJobQuery.UPDATE_WORKFLOW_RERUN, wfBean));
             // call JPAExecutor to do the bulk writes
-            jpaService.execute(new BulkUpdateDeleteJPAExecutor(updateList, deleteList, true));
+            BatchQueryExecutor.getInstance().executeBatchInsertUpdateDelete(null, updateList, deleteList);
         }
         catch (JPAExecutorException je) {
             throw new CommandException(je);
         }
 
         return null;
+    }
+
+
+    @SuppressWarnings("unchecked")
+	private void writeSLARegistration(Element wfElem, String jobSlaXml, String id, String parentId, String user,
+            String appName, ELEvaluator evalSla) throws JDOMException, CommandException {
+        if (jobSlaXml != null && jobSlaXml.length() > 0) {
+            Element eSla = XmlUtils.parseXml(jobSlaXml);
+            // insert into new table
+            SLAOperations.createSlaRegistrationEvent(eSla, jobId, parentId, AppType.WORKFLOW_JOB, user, appName, LOG,
+                    true);
+        }
+        // Add sla for wf actions
+        for (Element action : (List<Element>) wfElem.getChildren("action", wfElem.getNamespace())) {
+            Element actionSla = XmlUtils.getSLAElement(action);
+            if (actionSla != null) {
+                String actionSlaXml = SubmitXCommand.resolveSla(actionSla, evalSla);
+                actionSla = XmlUtils.parseXml(actionSlaXml);
+                if (!nodesToSkip.contains(action.getAttributeValue("name"))) {
+                    String actionId = Services.get().get(UUIDService.class)
+                            .generateChildId(jobId, action.getAttributeValue("name") + "");
+                    SLAOperations.createSlaRegistrationEvent(actionSla, actionId, jobId, AppType.WORKFLOW_ACTION, user,
+                            appName, LOG, true);
+                }
+            }
+        }
+
     }
 
     /**
@@ -341,6 +394,7 @@ public class ReRunXCommand extends WorkflowXCommand<Void> {
      */
     @Override
     protected void loadState() throws CommandException {
+        eagerLoadState();
     }
 
     /* (non-Javadoc)
@@ -348,5 +402,6 @@ public class ReRunXCommand extends WorkflowXCommand<Void> {
      */
     @Override
     protected void verifyPrecondition() throws CommandException, PreconditionException {
+        eagerVerifyPrecondition();
     }
 }

@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -53,7 +53,7 @@ import org.apache.oozie.coord.CoordELEvaluator;
 import org.apache.oozie.coord.CoordELFunctions;
 import org.apache.oozie.coord.CoordinatorJobException;
 import org.apache.oozie.coord.TimeUnit;
-import org.apache.oozie.executor.jpa.CoordJobInsertJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.service.DagXLogInfoService;
 import org.apache.oozie.service.HadoopAccessorException;
@@ -96,7 +96,6 @@ import org.xml.sax.SAXException;
 public class CoordSubmitXCommand extends SubmitTransitionXCommand {
 
     private Configuration conf;
-    private final String authToken;
     private final String bundleId;
     private final String coordName;
     private boolean dryrun;
@@ -158,12 +157,10 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
      * Constructor to create the Coordinator Submit Command.
      *
      * @param conf : Configuration for Coordinator job
-     * @param authToken : To be used for authentication
      */
-    public CoordSubmitXCommand(Configuration conf, String authToken) {
+    public CoordSubmitXCommand(Configuration conf) {
         super("coord_submit", "coord_submit", 1);
         this.conf = ParamChecker.notNull(conf, "conf");
-        this.authToken = ParamChecker.notEmpty(authToken, "authToken");
         this.bundleId = null;
         this.coordName = null;
     }
@@ -172,14 +169,12 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
      * Constructor to create the Coordinator Submit Command by bundle job.
      *
      * @param conf : Configuration for Coordinator job
-     * @param authToken : To be used for authentication
      * @param bundleId : bundle id
      * @param coordName : coord name
      */
-    public CoordSubmitXCommand(Configuration conf, String authToken, String bundleId, String coordName) {
+    public CoordSubmitXCommand(Configuration conf, String bundleId, String coordName) {
         super("coord_submit", "coord_submit", 1);
         this.conf = ParamChecker.notNull(conf, "conf");
-        this.authToken = ParamChecker.notEmpty(authToken, "authToken");
         this.bundleId = ParamChecker.notEmpty(bundleId, "bundleId");
         this.coordName = ParamChecker.notEmpty(coordName, "coordName");
     }
@@ -189,10 +184,9 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
      *
      * @param dryrun : if dryrun
      * @param conf : Configuration for Coordinator job
-     * @param authToken : To be used for authentication
      */
-    public CoordSubmitXCommand(boolean dryrun, Configuration conf, String authToken) {
-        this(conf, authToken);
+    public CoordSubmitXCommand(boolean dryrun, Configuration conf) {
+        this(conf);
         this.dryrun = dryrun;
     }
 
@@ -214,12 +208,12 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
             LOG.debug("jobXml after initial validation " + XmlUtils.prettyPrint(appXml).toString());
 
             Element eXml = XmlUtils.parseXml(appXml);
-            
+
             String appNamespace = readAppNamespace(eXml);
             coordJob.setAppNamespace(appNamespace);
 
             ParameterVerifier.verifyParameters(conf, eXml);
-            
+
             appXml = XmlUtils.removeComments(appXml);
             initEvaluators();
             Element eJob = basicResolveAndIncludeDS(appXml, conf, coordJob);
@@ -631,9 +625,10 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
         // job's main attributes
         // frequency
         String val = resolveAttribute("frequency", eAppXml, evalFreq);
-        int ival = ParamChecker.checkInteger(val, "frequency");
-        ParamChecker.checkGTZero(ival, "frequency");
-        coordJob.setFrequency(ival);
+        int ival = 0;
+
+        val = ParamChecker.checkFrequency(val);
+        coordJob.setFrequency(val);
         TimeUnit tmp = (evalFreq.getVariable("timeunit") == null) ? TimeUnit.MINUTE : ((TimeUnit) evalFreq
                 .getVariable("timeunit"));
         addAnAttribute("freq_timeunit", eAppXml, tmp.toString());
@@ -708,7 +703,7 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
         if (val == "") {
             val = Execution.FIFO.toString();
         }
-        coordJob.setExecution(Execution.valueOf(val));
+        coordJob.setExecutionOrder(Execution.valueOf(val));
         String[] acceptedVals = { Execution.LIFO.toString(), Execution.FIFO.toString(), Execution.LAST_ONLY.toString() };
         ParamChecker.isMember(val, acceptedVals, "execution");
 
@@ -748,8 +743,7 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
      * @throws CommandException thrown if failed to resolve sla events
      */
     private void resolveSLA(Element eAppXml, CoordinatorJobBean coordJob) throws CommandException {
-        Element eSla = eAppXml.getChild("action", eAppXml.getNamespace()).getChild("info",
-                Namespace.getNamespace(SchemaService.SLA_NAME_SPACE_URI));
+        Element eSla = XmlUtils.getSLAElement(eAppXml.getChild("action", eAppXml.getNamespace()));
 
         if (eSla != null) {
             String slaXml = XmlUtils.prettyPrint(eSla).toString();
@@ -1086,7 +1080,6 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
     private String storeToDB(Element eJob, CoordinatorJobBean coordJob) throws CommandException {
         String jobId = Services.get().get(UUIDService.class).generateId(ApplicationType.COORDINATOR);
         coordJob.setId(jobId);
-        coordJob.setAuthToken(this.authToken);
 
         coordJob.setAppPath(conf.get(OozieClient.COORDINATOR_APP_PATH));
         coordJob.setCreatedTime(new Date());
@@ -1101,10 +1094,12 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
         if (!dryrun) {
             coordJob.setLastModifiedTime(new Date());
             try {
-                jpaService.execute(new CoordJobInsertJPAExecutor(coordJob));
+                CoordJobQueryExecutor.getInstance().insert(coordJob);
             }
-            catch (JPAExecutorException je) {
-                throw new CommandException(je);
+            catch (JPAExecutorException jpaee) {
+                coordJob.setId(null);
+                coordJob.setStatus(CoordinatorJob.Status.FAILED);
+                throw new CommandException(jpaee);
             }
         }
         return jobId;

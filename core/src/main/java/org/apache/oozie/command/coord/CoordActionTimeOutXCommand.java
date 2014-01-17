@@ -25,8 +25,10 @@ import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
 import org.apache.oozie.executor.jpa.CoordActionGetForTimeoutJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordActionGetJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor.CoordActionQuery;
+import org.apache.oozie.service.EventHandlerService;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.util.LogUtils;
@@ -37,12 +39,15 @@ import org.apache.oozie.util.ParamChecker;
  */
 public class CoordActionTimeOutXCommand extends CoordinatorXCommand<Void> {
     private CoordinatorActionBean actionBean;
+    private String user;
+    private String appName;
     private JPAService jpaService = null;
 
-    public CoordActionTimeOutXCommand(CoordinatorActionBean actionBean) {
+    public CoordActionTimeOutXCommand(CoordinatorActionBean actionBean, String user, String appName) {
         super("coord_action_timeout", "coord_action_timeout", 1);
-        ParamChecker.notNull(actionBean, "ActionBean");
-        this.actionBean = actionBean;
+        this.actionBean = ParamChecker.notNull(actionBean, "ActionBean");
+        this.user = ParamChecker.notEmpty(user, "user");
+        this.appName = ParamChecker.notEmpty(appName, "appName");
     }
 
     /* (non-Javadoc)
@@ -52,10 +57,14 @@ public class CoordActionTimeOutXCommand extends CoordinatorXCommand<Void> {
     protected Void execute() throws CommandException {
         if (actionBean.getStatus() == CoordinatorAction.Status.WAITING) {
             actionBean.setStatus(CoordinatorAction.Status.TIMEDOUT);
-            queue(new CoordActionNotificationXCommand(actionBean), 100);
-            actionBean.setLastModifiedTime(new Date());
             try {
-                jpaService.execute(new org.apache.oozie.executor.jpa.CoordActionUpdateStatusJPAExecutor(actionBean));
+                queue(new CoordActionNotificationXCommand(actionBean), 100);
+                actionBean.setLastModifiedTime(new Date());
+                CoordActionQueryExecutor.getInstance().executeUpdate(
+                        CoordActionQuery.UPDATE_COORD_ACTION_STATUS_PENDING_TIME, actionBean);
+                if (EventHandlerService.isEnabled()) {
+                    generateEvent(actionBean, user, appName, null);
+                }
             }
             catch (JPAExecutorException e) {
                 throw new CommandException(e);
@@ -70,6 +79,11 @@ public class CoordActionTimeOutXCommand extends CoordinatorXCommand<Void> {
     @Override
     public String getEntityKey() {
         return actionBean.getJobId();
+    }
+
+    @Override
+    public String getKey() {
+        return getName() + "_" + actionBean.getId();
     }
 
     /* (non-Javadoc)
@@ -105,8 +119,8 @@ public class CoordActionTimeOutXCommand extends CoordinatorXCommand<Void> {
     @Override
     protected void verifyPrecondition() throws CommandException, PreconditionException {
         if (actionBean.getStatus() != CoordinatorAction.Status.WAITING) {
-            throw new PreconditionException(ErrorCode.E1100, "The coord action must have status " + CoordinatorAction.Status.WAITING
-                    + " but has status [" + actionBean.getStatus() + "]");
+            throw new PreconditionException(ErrorCode.E1100, "The coord action must have status "
+                    + CoordinatorAction.Status.WAITING + " but has status [" + actionBean.getStatus() + "]");
         }
     }
 }

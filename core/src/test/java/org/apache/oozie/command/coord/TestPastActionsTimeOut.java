@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,9 +25,9 @@ import java.net.URL;
 import java.util.List;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.oozie.client.rest.JsonCoordinatorAction;
 import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.client.CoordinatorJob;
+import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.CoordinatorEngine;
 import org.apache.oozie.CoordinatorJobBean;
 import org.apache.oozie.client.OozieClient;
@@ -82,7 +82,7 @@ public class TestPastActionsTimeOut extends XTestCase {
         conf.set(OozieClient.COORDINATOR_APP_PATH, appPath);
         conf.set(OozieClient.USER_NAME, getTestUser());
 
-        CoordinatorEngine ce = new CoordinatorEngine(getTestUser(), "UNIT_TESTING");
+        CoordinatorEngine ce = new CoordinatorEngine(getTestUser());
         String jobId = ce.submitJob(conf, true);
 
         assertEquals(jobId.substring(jobId.length() - 2), "-C");
@@ -131,7 +131,7 @@ public class TestPastActionsTimeOut extends XTestCase {
      * @throws Exception thrown if failed
      */
     private void _testTimeout(final String jobId) throws Exception {
-        final CoordinatorEngine ce = new CoordinatorEngine(getTestUser(), "UNIT_TESTING");
+        final CoordinatorEngine ce = new CoordinatorEngine(getTestUser());
 
         waitFor(6000, new Predicate() {
             public boolean evaluate() throws Exception {
@@ -156,7 +156,7 @@ public class TestPastActionsTimeOut extends XTestCase {
         assertTrue(actions.size() > 0);
 
         for (CoordinatorAction action : actions) {
-            JsonCoordinatorAction json = (JsonCoordinatorAction) action;
+            CoordinatorActionBean json = (CoordinatorActionBean) action;
             assertEquals(10, json.getTimeOut());
         }
     }

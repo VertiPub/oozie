@@ -38,6 +38,7 @@ import org.apache.oozie.BulkResponseInfo;
 import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.CoordinatorJobBean;
 import org.apache.oozie.ErrorCode;
+import org.apache.oozie.StringBlob;
 import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.util.DateUtils;
 import org.apache.oozie.util.ParamChecker;
@@ -187,7 +188,7 @@ public class BulkJPAExecutor implements JPAExecutor<BulkResponseInfo> {
         boolean firstVal = true;
         for (String status : nullToEmpty(statuses)) {
             if (firstVal) {
-                sb.append(" AND a.status IN (\'" + status + "\'");
+                sb.append(" AND a.statusStr IN (\'" + status + "\'");
                 firstVal = false;
             }
             else {
@@ -198,7 +199,7 @@ public class BulkJPAExecutor implements JPAExecutor<BulkResponseInfo> {
             sb.append(") ");
         }
         else { // statuses was null. adding default
-            sb.append(" AND a.status IN ('KILLED', 'FAILED') ");
+            sb.append(" AND a.statusStr IN ('KILLED', 'FAILED') ");
         }
         return sb;
     }
@@ -263,7 +264,7 @@ public class BulkJPAExecutor implements JPAExecutor<BulkResponseInfo> {
             actionBean.setNominalTime(DateUtils.toDate((Timestamp) arr[8]));
         }
         if (arr[9] != null) {
-            actionBean.setMissingDependencies((String) arr[9]);
+            actionBean.setMissingDependenciesBlob((StringBlob) arr[9]);
         }
         if (arr[10] != null) {
             coordBean.setId((String) arr[10]);
@@ -293,6 +294,9 @@ public class BulkJPAExecutor implements JPAExecutor<BulkResponseInfo> {
         bean.setAppName(name);
         if (barr[1] != null) {
             bean.setStatus(BundleJob.Status.valueOf((String) barr[1]));
+        }
+        if (barr[2] != null) {
+            bean.setUser((String) barr[2]);
         }
         return bean;
     }

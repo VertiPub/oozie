@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -30,6 +30,7 @@ import org.apache.oozie.ErrorCode;
 import org.apache.oozie.client.OozieClient;
 import org.apache.oozie.client.XOozieClient;
 import org.apache.oozie.client.rest.JsonBean;
+import org.apache.oozie.client.rest.JsonTags;
 import org.apache.oozie.client.rest.RestConstants;
 import org.apache.oozie.service.AuthorizationException;
 import org.apache.oozie.service.AuthorizationService;
@@ -48,7 +49,8 @@ public abstract class BaseJobServlet extends JsonRestServlet {
     static {
         RESOURCES_INFO[0] = new ResourceInfo("*", Arrays.asList("PUT", "GET"), Arrays.asList(new ParameterInfo(
                 RestConstants.ACTION_PARAM, String.class, true, Arrays.asList("PUT")), new ParameterInfo(
-                RestConstants.JOB_SHOW_PARAM, String.class, false, Arrays.asList("GET"))));
+                RestConstants.JOB_SHOW_PARAM, String.class, false, Arrays.asList("GET")), new ParameterInfo(
+                        RestConstants.ORDER_PARAM, String.class, false, Arrays.asList("GET"))));
     }
 
     public BaseJobServlet(String instrumentationName) {
@@ -91,10 +93,16 @@ public abstract class BaseJobServlet extends JsonRestServlet {
             response.setStatus(HttpServletResponse.SC_OK);
         }
         else if (action.equals(RestConstants.JOB_ACTION_KILL)) {
+            validateContentType(request, RestConstants.XML_CONTENT_TYPE);
             stopCron();
-            killJob(request, response);
+            JSONObject json =  killJob(request, response);
             startCron();
-            response.setStatus(HttpServletResponse.SC_OK);
+            if (json != null) {
+                sendJsonResponse(response, HttpServletResponse.SC_OK, json);
+            }
+            else {
+                response.setStatus(HttpServletResponse.SC_OK);
+            }
         }
         else if (action.equals(RestConstants.JOB_ACTION_CHANGE)) {
             stopCron();
@@ -235,6 +243,16 @@ public abstract class BaseJobServlet extends JsonRestServlet {
             startCron();
             sendJsonResponse(response, HttpServletResponse.SC_OK, job, timeZoneId);
         }
+
+        else if (show.equals(RestConstants.JOB_SHOW_JMS_TOPIC)) {
+            stopCron();
+            String jmsTopicName = getJMSTopicName(request, response);
+            JSONObject json = new JSONObject();
+            json.put(JsonTags.JMS_TOPIC_NAME, jmsTopicName);
+            startCron();
+            sendJsonResponse(response, HttpServletResponse.SC_OK, json);
+        }
+
         else if (show.equals(RestConstants.JOB_SHOW_LOG)) {
             response.setContentType(TEXT_UTF8);
             streamJobLog(request, response);
@@ -296,10 +314,11 @@ public abstract class BaseJobServlet extends JsonRestServlet {
      *
      * @param request
      * @param response
+     * @return
      * @throws XServletException
      * @throws IOException TODO
      */
-    abstract void killJob(HttpServletRequest request, HttpServletResponse response) throws XServletException,
+    abstract JSONObject killJob(HttpServletRequest request, HttpServletResponse response) throws XServletException,
             IOException;
 
     /**
@@ -370,5 +389,15 @@ public abstract class BaseJobServlet extends JsonRestServlet {
      * @throws IOException
      */
     abstract void streamJobGraph(HttpServletRequest request, HttpServletResponse response)
+            throws XServletException, IOException;
+
+    /**
+     * abstract method to get JMS topic name for a job
+     * @param request
+     * @param response
+     * @throws XServletException
+     * @throws IOException
+     */
+    abstract String getJMSTopicName(HttpServletRequest request, HttpServletResponse response)
             throws XServletException, IOException;
 }

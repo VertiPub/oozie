@@ -77,7 +77,9 @@ public class OozieClient {
 
     public static final long WS_PROTOCOL_VERSION_0 = 0;
 
-    public static final long WS_PROTOCOL_VERSION = 1;
+    public static final long WS_PROTOCOL_VERSION_1 = 1;
+
+    public static final long WS_PROTOCOL_VERSION = 2; // pointer to current version
 
     public static final String USER_NAME = "user.name";
 
@@ -126,6 +128,20 @@ public class OozieClient {
 
     public static final String FILTER_UNIT = "unit";
 
+    public static final String FILTER_JOBID = "jobid";
+
+    public static final String FILTER_APPNAME = "appname";
+
+    public static final String FILTER_SLA_APPNAME = "app_name";
+
+    public static final String FILTER_SLA_ID = "id";
+
+    public static final String FILTER_SLA_PARENT_ID = "parent_id";
+
+    public static final String FILTER_SLA_NOMINAL_START = "nominal_start";
+
+    public static final String FILTER_SLA_NOMINAL_END = "nominal_end";
+
     public static final String CHANGE_VALUE_ENDTIME = "endtime";
 
     public static final String CHANGE_VALUE_PAUSETIME = "pausetime";
@@ -135,6 +151,8 @@ public class OozieClient {
     public static final String LIBPATH = "oozie.libpath";
 
     public static final String USE_SYSTEM_LIBPATH = "oozie.use.system.libpath";
+
+    public static final String OOZIE_SUSPEND_ON_NODES = "oozie.suspend.on.nodes";
 
     public static enum SYSTEM_MODE {
         NORMAL, NOWEBSERVICE, SAFEMODE
@@ -148,6 +166,7 @@ public class OozieClient {
     private String baseUrl;
     private String protocolUrl;
     private boolean validatedVersion = false;
+    private JSONArray supportedVersions;
     private final Map<String, String> headers = new HashMap<String, String>();
 
     private static ThreadLocal<String> USER_NAME_TL = new ThreadLocal<String>();
@@ -231,6 +250,27 @@ public class OozieClient {
         this.debugMode = debugMode;
     }
 
+    private String getBaseURLForVersion(long protocolVersion) throws OozieClientException {
+        try {
+            if (supportedVersions == null) {
+                supportedVersions = getSupportedProtocolVersions();
+            }
+            if (supportedVersions == null) {
+                throw new OozieClientException("HTTP error", "no response message");
+            }
+            if (supportedVersions.contains(protocolVersion)) {
+                return baseUrl + "v" + protocolVersion + "/";
+            }
+            else {
+                throw new OozieClientException(OozieClientException.UNSUPPORTED_VERSION, "Protocol version "
+                        + protocolVersion + " is not supported");
+            }
+        }
+        catch (IOException e) {
+            throw new OozieClientException(OozieClientException.IO_ERROR, e);
+        }
+    }
+
     /**
      * Validate that the Oozie client and server instances are protocol compatible.
      *
@@ -239,35 +279,33 @@ public class OozieClient {
     public synchronized void validateWSVersion() throws OozieClientException {
         if (!validatedVersion) {
             try {
-                URL url = new URL(baseUrl + RestConstants.VERSIONS);
-                HttpURLConnection conn = createConnection(url, "GET");
-                if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
-                    JSONArray array = (JSONArray) JSONValue.parse(new InputStreamReader(conn.getInputStream()));
-                    if (array == null) {
-                        throw new OozieClientException("HTTP error", "no response message");
+                supportedVersions = getSupportedProtocolVersions();
+                if (supportedVersions == null) {
+                    throw new OozieClientException("HTTP error", "no response message");
+                }
+                if (!supportedVersions.contains(WS_PROTOCOL_VERSION)
+                        && !supportedVersions.contains(WS_PROTOCOL_VERSION_1)
+                        && !supportedVersions.contains(WS_PROTOCOL_VERSION_0)) {
+                    StringBuilder msg = new StringBuilder();
+                    msg.append("Supported version [").append(WS_PROTOCOL_VERSION)
+                            .append("] or less, Unsupported versions[");
+                    String separator = "";
+                    for (Object version : supportedVersions) {
+                        msg.append(separator).append(version);
                     }
-                    if (!array.contains(WS_PROTOCOL_VERSION) && !array.contains(WS_PROTOCOL_VERSION_0)) {
-                        StringBuilder msg = new StringBuilder();
-                        msg.append("Supported version [").append(WS_PROTOCOL_VERSION).append(
-                                "] or less, Unsupported versions[");
-                        String separator = "";
-                        for (Object version : array) {
-                            msg.append(separator).append(version);
-                        }
-                        msg.append("]");
-                        throw new OozieClientException(OozieClientException.UNSUPPORTED_VERSION, msg.toString());
-                    }
-                    if (array.contains(WS_PROTOCOL_VERSION)) {
-                        protocolUrl = baseUrl + "v" + WS_PROTOCOL_VERSION + "/";
-                    }
-                    else {
-                        if (array.contains(WS_PROTOCOL_VERSION_0)) {
-                            protocolUrl = baseUrl + "v" + WS_PROTOCOL_VERSION_0 + "/";
-                        }
-                    }
+                    msg.append("]");
+                    throw new OozieClientException(OozieClientException.UNSUPPORTED_VERSION, msg.toString());
+                }
+                if (supportedVersions.contains(WS_PROTOCOL_VERSION)) {
+                    protocolUrl = baseUrl + "v" + WS_PROTOCOL_VERSION + "/";
+                }
+                else if (supportedVersions.contains(WS_PROTOCOL_VERSION_1)) {
+                    protocolUrl = baseUrl + "v" + WS_PROTOCOL_VERSION_1 + "/";
                 }
                 else {
-                    handleError(conn);
+                    if (supportedVersions.contains(WS_PROTOCOL_VERSION_0)) {
+                        protocolUrl = baseUrl + "v" + WS_PROTOCOL_VERSION_0 + "/";
+                    }
                 }
             }
             catch (IOException ex) {
@@ -275,6 +313,19 @@ public class OozieClient {
             }
             validatedVersion = true;
         }
+    }
+
+    private JSONArray getSupportedProtocolVersions() throws IOException, OozieClientException {
+        JSONArray versions = null;
+        URL url = new URL(baseUrl + RestConstants.VERSIONS);
+        HttpURLConnection conn = createConnection(url, "GET");
+        if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+            versions = (JSONArray) JSONValue.parse(new InputStreamReader(conn.getInputStream()));
+        }
+        else {
+            handleError(conn);
+        }
+        return versions;
     }
 
     /**
@@ -339,11 +390,17 @@ public class OozieClient {
         return Collections.unmodifiableMap(headers).keySet().iterator();
     }
 
-    private URL createURL(String collection, String resource, Map<String, String> parameters) throws IOException,
-            OozieClientException {
+    private URL createURL(Long protocolVersion, String collection, String resource, Map<String, String> parameters)
+            throws IOException, OozieClientException {
         validateWSVersion();
         StringBuilder sb = new StringBuilder();
-        sb.append(protocolUrl).append(collection);
+        if (protocolVersion == null) {
+            sb.append(protocolUrl);
+        }
+        else {
+            sb.append(getBaseURLForVersion(protocolVersion));
+        }
+        sb.append(collection);
         if (resource != null && resource.length() > 0) {
             sb.append("/").append(resource);
         }
@@ -397,9 +454,15 @@ public class OozieClient {
         private final String collection;
         private final String resource;
         private final Map<String, String> params;
+        private final Long protocolVersion;
 
         public ClientCallable(String method, String collection, String resource, Map<String, String> params) {
+            this(method, null, collection, resource, params);
+        }
+
+        public ClientCallable(String method, Long protocolVersion, String collection, String resource, Map<String, String> params) {
             this.method = method;
+            this.protocolVersion = protocolVersion;
             this.collection = collection;
             this.resource = resource;
             this.params = params;
@@ -407,10 +470,10 @@ public class OozieClient {
 
         public T call() throws OozieClientException {
             try {
-                URL url = createURL(collection, resource, params);
+                URL url = createURL(protocolVersion, collection, resource, params);
                 if (validateCommand(url.toString())) {
                     if (getDebugMode() > 0) {
-                        System.out.println("Connection URL:[" + url + "]");
+                        System.out.println(method + " " + url);
                     }
                     HttpURLConnection conn = createConnection(url, method);
                     return call(conn);
@@ -484,6 +547,11 @@ public class OozieClient {
             TransformerFactory transFactory = TransformerFactory.newInstance();
             Transformer transformer = transFactory.newTransformer();
             transformer.transform(source, result);
+            if (getDebugMode() > 0) {
+                result = new StreamResult(System.out);
+                transformer.transform(source, result);
+                System.out.println();
+            }
         }
         catch (Exception e) {
             throw new IOException(e);
@@ -550,6 +618,7 @@ public class OozieClient {
 
         @Override
         protected Void call(HttpURLConnection conn) throws IOException, OozieClientException {
+            conn.setRequestProperty("content-type", RestConstants.XML_CONTENT_TYPE);
             if (!(conn.getResponseCode() == HttpURLConnection.HTTP_OK)) {
                 handleError(conn);
             }
@@ -619,13 +688,25 @@ public class OozieClient {
     }
 
     /**
-     * Kill a workflow job.
+     * Kill a workflow/coord/bundle job.
      *
      * @param jobId job Id.
      * @throws OozieClientException thrown if the job could not be killed.
      */
     public void kill(String jobId) throws OozieClientException {
         new JobAction(jobId, RestConstants.JOB_ACTION_KILL).call();
+    }
+
+    /**
+     * Kill coordinator actions
+     * @param jobId coordinator Job Id
+     * @param rangeType type 'date' if -date is used, 'action-num' if -action is used
+     * @param scope kill scope for date or action nums
+     * @return list of coordinator actions that underwent kill
+     * @throws OozieClientException thrown if some actions could not be killed.
+     */
+    public List<CoordinatorAction> kill(String jobId, String rangeType, String scope) throws OozieClientException {
+        return new CoordActionsKill(jobId, rangeType, scope).call();
     }
 
     /**
@@ -653,6 +734,26 @@ public class OozieClient {
                 Reader reader = new InputStreamReader(conn.getInputStream());
                 JSONObject json = (JSONObject) JSONValue.parse(reader);
                 return JsonToBean.createWorkflowJob(json);
+            }
+            else {
+                handleError(conn);
+            }
+            return null;
+        }
+    }
+
+
+    private class JMSInfo extends ClientCallable<JMSConnectionInfo> {
+
+        JMSInfo() {
+            super("GET", RestConstants.ADMIN, RestConstants.ADMIN_JMS_INFO, prepareParams());
+        }
+
+        protected JMSConnectionInfo call(HttpURLConnection conn) throws IOException, OozieClientException {
+            if ((conn.getResponseCode() == HttpURLConnection.HTTP_OK)) {
+                Reader reader = new InputStreamReader(conn.getInputStream());
+                JSONObject json = (JSONObject) JSONValue.parse(reader);
+                return JsonToBean.createJMSConnectionInfo(json);
             }
             else {
                 handleError(conn);
@@ -690,6 +791,15 @@ public class OozieClient {
      */
     public WorkflowJob getJobInfo(String jobId) throws OozieClientException {
         return getJobInfo(jobId, 0, 0);
+    }
+
+    /**
+     * Get the JMS Connection info
+     * @return JMSConnectionInfo object
+     * @throws OozieClientException
+     */
+    public JMSConnectionInfo getJMSConnectionInfo() throws OozieClientException {
+        return new JMSInfo().call();
     }
 
     /**
@@ -748,6 +858,36 @@ public class OozieClient {
 
         JobLog(String jobId, String logRetrievalType, String logRetrievalScope, PrintStream ps) {
             super(jobId, logRetrievalType, logRetrievalScope, RestConstants.JOB_SHOW_LOG, ps);
+        }
+    }
+
+    /**
+     * Gets the JMS topic name for a particular job
+     * @param jobId given jobId
+     * @return the JMS topic name
+     * @throws OozieClientException
+     */
+    public String getJMSTopicName(String jobId) throws OozieClientException {
+        return new JMSTopic(jobId).call();
+    }
+
+    private class JMSTopic extends ClientCallable<String> {
+
+        JMSTopic(String jobId) {
+            super("GET", RestConstants.JOB, notEmpty(jobId, "jobId"), prepareParams(RestConstants.JOB_SHOW_PARAM,
+                    RestConstants.JOB_SHOW_JMS_TOPIC));
+        }
+
+        protected String call(HttpURLConnection conn) throws IOException, OozieClientException {
+            if ((conn.getResponseCode() == HttpURLConnection.HTTP_OK)) {
+                Reader reader = new InputStreamReader(conn.getInputStream());
+                JSONObject json = (JSONObject) JSONValue.parse(reader);
+                return (String) json.get(JsonTags.JMS_TOPIC_NAME);
+            }
+            else {
+                handleError(conn);
+            }
+            return null;
         }
     }
 
@@ -952,7 +1092,7 @@ public class OozieClient {
      * @throws OozieClientException thrown if the job info could not be retrieved.
      */
     public CoordinatorJob getCoordJobInfo(String jobId) throws OozieClientException {
-        return new CoordJobInfo(jobId, null, 0, 0).call();
+        return new CoordJobInfo(jobId, null, -1, -1).call();
     }
 
     /**
@@ -1088,12 +1228,36 @@ public class OozieClient {
         }
     }
 
+    private class CoordActionsKill extends ClientCallable<List<CoordinatorAction>> {
+
+        CoordActionsKill(String jobId, String rangeType, String scope) {
+            super("PUT", RestConstants.JOB, notEmpty(jobId, "jobId"), prepareParams(RestConstants.ACTION_PARAM,
+                    RestConstants.JOB_ACTION_KILL, RestConstants.JOB_COORD_RANGE_TYPE_PARAM, rangeType,
+                    RestConstants.JOB_COORD_SCOPE_PARAM, scope));
+        }
+
+        @Override
+        protected List<CoordinatorAction> call(HttpURLConnection conn) throws IOException, OozieClientException {
+            conn.setRequestProperty("content-type", RestConstants.XML_CONTENT_TYPE);
+            if ((conn.getResponseCode() == HttpURLConnection.HTTP_OK)) {
+                Reader reader = new InputStreamReader(conn.getInputStream());
+                JSONObject json = (JSONObject) JSONValue.parse(reader);
+                JSONArray coordActions = (JSONArray) json.get(JsonTags.COORDINATOR_ACTIONS);
+                return JsonToBean.createCoordinatorActionList(coordActions);
+            }
+            else {
+                handleError(conn);
+            }
+            return null;
+        }
+    }
+
     private class CoordRerun extends ClientCallable<List<CoordinatorAction>> {
 
         CoordRerun(String jobId, String rerunType, String scope, boolean refresh, boolean noCleanup) {
             super("PUT", RestConstants.JOB, notEmpty(jobId, "jobId"), prepareParams(RestConstants.ACTION_PARAM,
-                    RestConstants.JOB_COORD_ACTION_RERUN, RestConstants.JOB_COORD_RERUN_TYPE_PARAM, rerunType,
-                    RestConstants.JOB_COORD_RERUN_SCOPE_PARAM, scope, RestConstants.JOB_COORD_RERUN_REFRESH_PARAM,
+                    RestConstants.JOB_COORD_ACTION_RERUN, RestConstants.JOB_COORD_RANGE_TYPE_PARAM, rerunType,
+                    RestConstants.JOB_COORD_SCOPE_PARAM, scope, RestConstants.JOB_COORD_RERUN_REFRESH_PARAM,
                     Boolean.toString(refresh), RestConstants.JOB_COORD_RERUN_NOCLEANUP_PARAM, Boolean
                             .toString(noCleanup)));
         }
@@ -1200,15 +1364,16 @@ public class OozieClient {
      * @param len number of results
      * @throws OozieClientException
      */
-    public void getSlaInfo(int start, int len) throws OozieClientException {
-        new SlaInfo(start, len).call();
+    public void getSlaInfo(int start, int len, String filter) throws OozieClientException {
+        new SlaInfo(start, len, filter).call();
     }
 
     private class SlaInfo extends ClientCallable<Void> {
 
-        SlaInfo(int start, int len) {
-            super("GET", RestConstants.SLA, "", prepareParams(RestConstants.SLA_GT_SEQUENCE_ID,
-                    Integer.toString(start), RestConstants.MAX_EVENTS, Integer.toString(len)));
+        SlaInfo(int start, int len, String filter) {
+            super("GET", WS_PROTOCOL_VERSION_1, RestConstants.SLA, "", prepareParams(RestConstants.SLA_GT_SEQUENCE_ID,
+                    Integer.toString(start), RestConstants.MAX_EVENTS, Integer.toString(len),
+                    RestConstants.JOBS_FILTER_PARAM, filter));
         }
 
         @Override
@@ -1451,6 +1616,41 @@ public class OozieClient {
     public List<String> getQueueDump() throws OozieClientException {
         return new GetQueueDump().call();
     }
+
+    private class GetAvailableOozieServers extends ClientCallable<Map<String, String>> {
+
+        GetAvailableOozieServers() {
+            super("GET", RestConstants.ADMIN, RestConstants.ADMIN_AVAILABLE_OOZIE_SERVERS_RESOURCE, prepareParams());
+        }
+
+        @Override
+        protected Map<String, String> call(HttpURLConnection conn) throws IOException, OozieClientException {
+            if ((conn.getResponseCode() == HttpURLConnection.HTTP_OK)) {
+                Reader reader = new InputStreamReader(conn.getInputStream());
+                JSONObject json = (JSONObject) JSONValue.parse(reader);
+                Map<String, String> map = new HashMap<String, String>();
+                for (Object key : json.keySet()) {
+                    map.put((String)key, (String)json.get(key));
+                }
+                return map;
+            }
+            else {
+                handleError(conn);
+            }
+            return null;
+        }
+    }
+
+    /**
+     * Return the list of available Oozie servers.
+     *
+     * @return the list of available Oozie servers.
+     * @throws OozieClientException throw if it the list of available Oozie servers could not be retrieved.
+     */
+    public Map<String, String> getAvailableOozieServers() throws OozieClientException {
+        return new GetAvailableOozieServers().call();
+    }
+
 
     /**
      * Check if the string is not null or not empty.

@@ -14,6 +14,9 @@ Map/Reduce and Pig jobs.
 %TOC%
 
 ---++ Changelog
+---+++!! 2013JUL03
+
+   * #Appendix A, Added new workflow schema 0.5 and SLA schema 0.2
 ---+++!! 2012AUG30
 
    * #4.2.2 Added two EL functions (replaceAll and appendAll)
@@ -131,6 +134,11 @@ schema 0.4
 ---+++!! 2009FEB22
 
    * Opened [[https://issues.apache.org/jira/browse/HADOOP-5303][JIRA HADOOP-5303]]
+
+---+++!! 27/DEC/2012:
+
+   * Added information on dropping hcatalog table partitions in prepare block
+   * Added hcatalog EL functions section
 
 ---++ 0 Definitions
 
@@ -668,9 +676,12 @@ Pipe properties can be overridden by specifying them in the =job-xml= file or =c
 </workflow-app>
 </verbatim>
 
-The =prepare= element, if present, indicates a list of path do delete before starting the job. This should be used
-exclusively for directory cleanup for the job to be executed. The delete operation will be performed in the
- =fs.default.name= filesystem.
+The =prepare= element, if present, indicates a list of paths to delete before starting the job. This should be used
+exclusively for directory cleanup or dropping of hcatalog table partitions for the job to be executed. The delete operation
+will be performed in the =fs.default.name= filesystem for hdfs URIs. The format to specify a hcatalog table partition URI is
+hcat://[metastore server]:[port]/[database name]/[table name]/[partkey1]=[value];[partkey2]=[value].
+In case of a hcatalog URI, the hive-site.xml needs to be shipped using =file= tag and the hcatalog and hive jars
+need to be placed in workflow lib directory or specified using =archive= tag.
 
 The =job-xml= element, if present, must refer to a Hadoop JobConf =job.xml= file bundled in the workflow application.
 The =job-xml= element is optional and as of schema 0.4, multiple =job-xml= elements are allowed in order to specify multiple Hadoop JobConf =job.xml= files.
@@ -814,9 +825,9 @@ The workflow job will wait until the pig job completes before continuing to the 
 The =pig= action has to be configured with the job-tracker, name-node, pig script and the necessary parameters and
 configuration to run the Pig job.
 
-A =pig= action can be configured to perform HDFS files/directories cleanup before starting the Pig job. This capability
-enables Oozie to retry a Pig job in the situation of a transient failure (Pig creates temporary directories for
-intermediate data, thus a retry without cleanup would fail).
+A =pig= action can be configured to perform HDFS files/directories cleanup or HCatalog partitions cleanup before
+starting the Pig job. This capability enables Oozie to retry a Pig job in the situation of a transient failure (Pig
+creates temporary directories for intermediate data, thus a retry without cleanup would fail).
 
 Hadoop JobConf properties can be specified in a JobConf XML file bundled with the workflow application or they can be
 indicated inline in the =pig= action configuration.
@@ -913,8 +924,12 @@ section [#FilesAchives][Adding Files and Archives for the Job].
 </workflow-app>
 </verbatim>
 
-The =prepare= element, if present, indicates a list of path do delete before starting the job. This should be used
-exclusively for directory cleanup for the job to be executed.
+The =prepare= element, if present, indicates a list of paths to delete before starting the job. This should be used
+exclusively for directory cleanup or dropping of hcatalog table partitions for the job to be executed.
+The format to specify a hcatalog table partition URI is
+hcat://[metastore server]:[port]/[database name]/[table name]/[partkey1]=[value];[partkey2]=[value].
+In case of a hcatalog URI, the hive-site.xml needs to be shipped using =file= tag and the hcatalog and hive jars
+need to be placed in workflow lib directory or specified using =archive= tag.
 
 The =job-xml= element, if present, must refer to a Hadoop JobConf =job.xml= file bundled in the workflow application.
 The =job-xml= element is optional and as of schema 0.4, multiple =job-xml= elements are allowed in order to specify multiple Hadoop JobConf =job.xml= files.
@@ -1012,12 +1027,14 @@ All the above elements can be parameterized (templatized) using EL expressions.
 ---++++ 3.2.4 Fs (HDFS) action
 
 The =fs= action allows to manipulate files and directories in HDFS from a workflow application. The supported commands
-are =move=, =delete= and =mkdir=.
+are =move=, =delete=, =mkdir=, =chmod=, =touchz= and =chgrp=.
 
 The FS commands are executed synchronously from within the FS action, the workflow job will wait until the specified
 file commands are completed before continuing to the next action.
 
 Path names specified in the =fs= action can be parameterized (templatized) using EL expressions.
+Path name should be specified as a absolute path. In case of =move=, =delete=, =chmod= and =chgrp= commands, a glob pattern can also be specified instead of an absolute path.
+For =move=, glob pattern can only be specified for source path and not the target.
 
 Each file path must specify the file system URI, for move operations, the target must not specified the system URI.
 
@@ -1043,6 +1060,8 @@ executed. Thus there is less chance of an error occurring while the =fs= action 
             <chmod path='[PATH]' permissions='[PERMISSIONS]' dir-files='false' />
             ...
             <touchz path='[PATH]' />
+            ...
+            <chmod path='[PATH]' group='[GROUP]' dir-files='false' />
         </fs>
         <ok to="[NODE-NAME]"/>
         <error to="[NODE-NAME]"/>
@@ -1074,6 +1093,12 @@ recursively to all levels within a directory, put a =recursive= element inside t
 The =touchz= command creates a zero length file in the specified path if none exists. If one already exists, then touchz will perform a touch operation.
 Touchz works only for absolute paths.
 
+The =chgrp= command changes the group for the specified path.
+When doing a =chgrp= command on a directory, by default the command is applied to the directory and the files one level
+within the directory. To apply the =chgrp= command to the directory, without affecting the files within it,
+the =dir-files= attribute must be set to =false=.
+To apply the =chgrp= command recursively to all levels within a directory, put a =recursive= element inside the <chgrp> element.
+
 *Example:*
 
 <verbatim>
@@ -1085,6 +1110,7 @@ Touchz works only for absolute paths.
             <mkdir path='archives/${wf:id()}'/>
             <move source='${jobInput}' target='archives/${wf:id()}/processed-input'/>
             <chmod path='${jobOutput}' permissions='-rwxrw-rw-' dir-files='true'><recursive/></chmod>
+            <chgrp path='${jobOutput}' group='testgroup' dir-files='true'><recursive/></chgrp>
         </fs>
         <ok to="myotherjob"/>
         <error to="errorcleanup"/>
@@ -1280,6 +1306,12 @@ In the above example, the workflow definition with the name =child-wf= will be r
 
 A configuration parameter =input.dir= is being passed as job property to the child workflow job.
 
+The subworkflow can inherit the lib jars from the parent workflow by setting =oozie.subworkflow.classpath.inheritance= to true
+in oozie-site.xml or on a per-job basis by setting =oozie.wf.subworkflow.classpath.inheritance= to true in a job.properties file.
+If both are specified, =oozie.wf.subworkflow.classpath.inheritance= has priority.  If the subworkflow and the parent have
+conflicting jars, the subworkflow's jar has priority.  By default, =oozie.wf.subworkflow.classpath.inheritance= is set to false.
+
+
 #JavaAction
 ---++++ 3.2.7 Java Action
 
@@ -1298,9 +1330,10 @@ To indicate an =error= action transition, the main Java class must throw an exce
 The main Java class must not call =System.exit(int n)= as this will make the =java= action to do an =error= transition
 regardless of the used exit code.
 
-A =java= action can be configured to perform HDFS files/directories cleanup before starting the Java application. This
-capability enables Oozie to retry a Java application in the situation of a transient or non-transient failure (This can
-be used to cleanup any temporary data which may have been created by the Java application in case of failure).
+A =java= action can be configured to perform HDFS files/directories cleanup or HCatalog partitions cleanup before
+starting the Java application. This capability enables Oozie to retry a Java application in the situation of a transient
+or non-transient failure (This can be used to cleanup any temporary data which may have been created by the Java
+application in case of failure).
 
 A =java= action can create a Hadoop configuration. The Hadoop configuration is made available as a local file to the
 Java application in its running directory, the file name is =oozie-action.conf.xml=. Similar to =map-reduce= and
@@ -1371,8 +1404,13 @@ be assigned to it. The queue name must be specified as a configuration property.
 </workflow-app>
 </verbatim>
 
-The =prepare= element, if present, indicates a list of path do delete before starting the Java application. This should
-be used exclusively for directory cleanup for the Java application to be executed.
+The =prepare= element, if present, indicates a list of paths to delete before starting the Java application. This should
+be used exclusively for directory cleanup or dropping of hcatalog table partitions for the Java application to be executed.
+In case of =delete=, a glob pattern can be used to specify path.
+The format to specify a hcatalog table partition URI is
+hcat://[metastore server]:[port]/[database name]/[table name]/[partkey1]=[value];[partkey2]=[value].
+In case of a hcatalog URI, the hive-site.xml needs to be shipped using =file= tag and the hcatalog and hive jars
+need to be placed in workflow lib directory or specified using =archive= tag.
 
 The =java-opts= element, if present, contains the command line parameters which are to be used to start the JVM that
 will execute the Java application. Using this element is equivalent to use the =mapred.child.java.opts= configuration
@@ -1412,6 +1450,25 @@ All the above elements can be parameterized (templatized) using EL expressions.
     ...
 </workflow-app>
 </verbatim>
+
+---+++++ 3.2.7.1 Overriding an action's Main class
+
+This feature is useful for developers to change the Main classes without having to recompile or redeploy Oozie.
+
+For most actions (not just the Java action), you can override the Main class it uses by specifying the following =configuration=
+property and making sure that your class is included in the workflow's classpath.  If you specify this in the Java action,
+the main-class element has priority.
+
+<verbatim>
+<property>
+   <name>oozie.launcher.action.main.class</name>
+   <value>org.my.CustomMain</value>
+</property>
+</verbatim>
+
+*Note:* Most actions typically pass information to their corresponding Main in specific ways; you should look at the action's
+existing Main to see how it works before creating your own.  In fact, its probably simplest to just subclass the existing Main and
+add/modify/overwrite any behavior you want to change.
 
 #WorkflowParameterization
 ---++ 4 Parameterization of Workflows
@@ -2009,14 +2066,26 @@ It returns the size in bytes of specified file. If the path is not a file, or if
 
 It returns the block size in bytes of specified file. If the path is not a file, or if it does not exist it returns -1.
 
+---++++ 4.2.8 HCatalog EL Functions
+
+For all the functions in this section the URI must be a hcatalog URI identifying a set of partitions in a table.
+The format to specify a hcatalog table partition URI is
+hcat://[metastore server]:[port]/[database name]/[table name]/[partkey1]=[value];[partkey2]=[value]. For example: <pre>hcat://foo:8020/mydb/mytable/region=us;dt=20121212</pre>
+
+*boolean hcat:exists(String uri)*
+
+It returns =true= or =false= based on if the partitions in the table exists or not.
+
 #WorkflowNotifications
----++ 5 Oozie Notifications
+---++ 5 Workflow Notifications
 
 Workflow jobs can be configured to make an HTTP GET notification upon start and end of a workflow action node and upon
 the completion of a workflow job.
 
 Oozie will make a best effort to deliver the notifications, in case of failure it will retry the notification a
 pre-configured number of times at a pre-configured interval before giving up.
+
+See also [[CoordinatorFunctionalSpec#CoordinatorNotifications][Coordinator Notifications]]
 
 ---+++ 5.1 Workflow Job Status Notification
 
@@ -2262,7 +2331,8 @@ and Mapreduce Streaming share library direcotry is =share/library/mapreduce-stre
 
 Oozie bundles a share library for specific versions of streaming, pig, hive, sqoop, distcp actions. These versions
 of streaming, pig, hive, sqoop and distcp have been tested and verified to work correctly with the version of Oozie
-that includes them.
+that includes them. Oozie also bundles a separate share library for hcatalog, which can be used with pig, hive and java
+actions (since Oozie 4.x).
 
 In addition, Oozie provides a mechanism to override the action share library JARs to allow using an alternate version
 of of the action JARs.
@@ -2270,13 +2340,17 @@ of of the action JARs.
 This mechanism enables Oozie administrators to patch share library JARs, to include alternate versios of the share
 libraries, to provide acess to more than one version at the same time.
 
-The sharelibrary override is supported at server level and at job level. The share library name is resolved using
-the following precedence order:
+The share library override is supported at server level and at job level. The share library directory names are resolved
+using the following precedence order:
 
    *  action.sharelib.for.#ACTIONTYPE# in the action configuration
    *  action.sharelib.for.#ACTIONTYPE# in the job configuration
    *  action.sharelib.for.#ACTIONTYPE# in the oozie server configuration
    *  action's =ActionExecutor getDefaultShareLibName()= method
+
+More than one share library directory name can be specified for an action by using a comma separated list (since Oozie 4.x).
+For example: When using HCatLoader and HCatStorer in pig, =action.sharelib.for.pig= can be set to =pig,hcatalog= to include
+both pig and hcatalog jars.
 
 ---++ 18 User-Retry for Workflow Actions (since Oozie 3.1)
 
@@ -2329,11 +2403,351 @@ Example of a global element:
 ...
 </verbatim>
 
+---++ 20 Suspend On Nodes
+
+Specifying =oozie.suspend.on.nodes= in a job.properties file lets users specify a list of actions that will cause Oozie to
+automatically suspend the workflow upon reaching any of those actions; like breakpoints in a debugger. To continue running the
+workflow, the user simply uses the
+[[DG_CommandLineTool#Resuming_a_Workflow_Coordinator_or_Bundle_Job][-resume command from the Oozie CLI]]. Specifying a * will
+cause Oozie to suspend the workflow on all nodes.
+
+For example:
+<verbatim>
+oozie.suspend.on.nodes=mr-node,my-pig-action,my-fork
+</verbatim>
+Specifying the above in a job.properties file will cause Oozie to suspend the workflow when any of those three actions are about
+to be executed.
+
 
 ---++ Appendixes
 
 #OozieWFSchema
 ---+++ Appendix A, Oozie XML-Schema
+---++++ Oozie Schema Version 0.5
+<verbatim>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:workflow="uri:oozie:workflow:0.5"
+           elementFormDefault="qualified" targetNamespace="uri:oozie:workflow:0.5">
+
+    <xs:element name="workflow-app" type="workflow:WORKFLOW-APP"/>
+
+    <xs:simpleType name="IDENTIFIER">
+        <xs:restriction base="xs:string">
+            <xs:pattern value="([a-zA-Z_]([\-_a-zA-Z0-9])*){1,39}"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <xs:complexType name="WORKFLOW-APP">
+        <xs:sequence>
+            <xs:element name="parameters" type="workflow:PARAMETERS" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="global" type="workflow:GLOBAL" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="credentials" type="workflow:CREDENTIALS" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="start" type="workflow:START" minOccurs="1" maxOccurs="1"/>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+                <xs:element name="decision" type="workflow:DECISION" minOccurs="1" maxOccurs="1"/>
+                <xs:element name="fork" type="workflow:FORK" minOccurs="1" maxOccurs="1"/>
+                <xs:element name="join" type="workflow:JOIN" minOccurs="1" maxOccurs="1"/>
+                <xs:element name="kill" type="workflow:KILL" minOccurs="1" maxOccurs="1"/>
+                <xs:element name="action" type="workflow:ACTION" minOccurs="1" maxOccurs="1"/>
+            </xs:choice>
+            <xs:element name="end" type="workflow:END" minOccurs="1" maxOccurs="1"/>
+            <xs:any namespace="uri:oozie:sla:0.1 uri:oozie:sla:0.2" minOccurs="0" maxOccurs="1"/>
+        </xs:sequence>
+        <xs:attribute name="name" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="PARAMETERS">
+        <xs:sequence>
+            <xs:element name="property" minOccurs="1" maxOccurs="unbounded">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="name" minOccurs="1" maxOccurs="1" type="xs:string"/>
+                        <xs:element name="value" minOccurs="0" maxOccurs="1" type="xs:string"/>
+                        <xs:element name="description" minOccurs="0" maxOccurs="1" type="xs:string"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="GLOBAL">
+        <xs:sequence>
+            <xs:element name="job-tracker" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="name-node" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="job-xml" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="configuration" type="workflow:CONFIGURATION" minOccurs="0" maxOccurs="1"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="START">
+        <xs:attribute name="to" type="workflow:IDENTIFIER" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="END">
+        <xs:attribute name="name" type="workflow:IDENTIFIER" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="DECISION">
+        <xs:sequence>
+            <xs:element name="switch" type="workflow:SWITCH" minOccurs="1" maxOccurs="1"/>
+        </xs:sequence>
+        <xs:attribute name="name" type="workflow:IDENTIFIER" use="required"/>
+    </xs:complexType>
+
+    <xs:element name="switch" type="workflow:SWITCH"/>
+
+    <xs:complexType name="SWITCH">
+        <xs:sequence>
+            <xs:sequence>
+                <xs:element name="case" type="workflow:CASE" minOccurs="1" maxOccurs="unbounded"/>
+                <xs:element name="default" type="workflow:DEFAULT" minOccurs="1" maxOccurs="1"/>
+            </xs:sequence>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="CASE">
+        <xs:simpleContent>
+            <xs:extension base="xs:string">
+                <xs:attribute name="to" type="workflow:IDENTIFIER" use="required"/>
+            </xs:extension>
+        </xs:simpleContent>
+    </xs:complexType>
+
+    <xs:complexType name="DEFAULT">
+        <xs:attribute name="to" type="workflow:IDENTIFIER" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="FORK_TRANSITION">
+        <xs:attribute name="start" type="workflow:IDENTIFIER" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="FORK">
+        <xs:sequence>
+            <xs:element name="path" type="workflow:FORK_TRANSITION" minOccurs="2" maxOccurs="unbounded"/>
+        </xs:sequence>
+        <xs:attribute name="name" type="workflow:IDENTIFIER" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="JOIN">
+        <xs:attribute name="name" type="workflow:IDENTIFIER" use="required"/>
+        <xs:attribute name="to" type="workflow:IDENTIFIER" use="required"/>
+    </xs:complexType>
+
+    <xs:element name="kill" type="workflow:KILL"/>
+
+    <xs:complexType name="KILL">
+        <xs:sequence>
+            <xs:element name="message" type="xs:string" minOccurs="1" maxOccurs="1"/>
+        </xs:sequence>
+        <xs:attribute name="name" type="workflow:IDENTIFIER" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="ACTION_TRANSITION">
+        <xs:attribute name="to" type="workflow:IDENTIFIER" use="required"/>
+    </xs:complexType>
+
+    <xs:element name="map-reduce" type="workflow:MAP-REDUCE"/>
+    <xs:element name="pig" type="workflow:PIG"/>
+    <xs:element name="sub-workflow" type="workflow:SUB-WORKFLOW"/>
+    <xs:element name="fs" type="workflow:FS"/>
+    <xs:element name="java" type="workflow:JAVA"/>
+
+    <xs:complexType name="ACTION">
+        <xs:sequence>
+            <xs:choice minOccurs="1" maxOccurs="1">
+                <xs:element name="map-reduce" type="workflow:MAP-REDUCE" minOccurs="1" maxOccurs="1"/>
+                <xs:element name="pig" type="workflow:PIG" minOccurs="1" maxOccurs="1"/>
+                <xs:element name="sub-workflow" type="workflow:SUB-WORKFLOW" minOccurs="1" maxOccurs="1"/>
+                <xs:element name="fs" type="workflow:FS" minOccurs="1" maxOccurs="1"/>
+                <xs:element name="java" type="workflow:JAVA" minOccurs="1" maxOccurs="1"/>
+                <xs:any namespace="##other" minOccurs="1" maxOccurs="1"/>
+            </xs:choice>
+            <xs:element name="ok" type="workflow:ACTION_TRANSITION" minOccurs="1" maxOccurs="1"/>
+            <xs:element name="error" type="workflow:ACTION_TRANSITION" minOccurs="1" maxOccurs="1"/>
+            <xs:any namespace="uri:oozie:sla:0.1 uri:oozie:sla:0.2" minOccurs="0" maxOccurs="1"/>
+        </xs:sequence>
+        <xs:attribute name="name" type="workflow:IDENTIFIER" use="required"/>
+        <xs:attribute name="cred" type="xs:string"/>
+        <xs:attribute name="retry-max" type="xs:string"/>
+        <xs:attribute name="retry-interval" type="xs:string"/>
+    </xs:complexType>
+
+    <xs:complexType name="MAP-REDUCE">
+        <xs:sequence>
+            <xs:element name="job-tracker" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="name-node" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="prepare" type="workflow:PREPARE" minOccurs="0" maxOccurs="1"/>
+            <xs:choice minOccurs="0" maxOccurs="1">
+                <xs:element name="streaming" type="workflow:STREAMING" minOccurs="0" maxOccurs="1"/>
+                <xs:element name="pipes" type="workflow:PIPES" minOccurs="0" maxOccurs="1"/>
+            </xs:choice>
+            <xs:element name="job-xml" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="configuration" type="workflow:CONFIGURATION" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="file" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="archive" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="PIG">
+        <xs:sequence>
+            <xs:element name="job-tracker" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="name-node" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="prepare" type="workflow:PREPARE" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="job-xml" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="configuration" type="workflow:CONFIGURATION" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="script" type="xs:string" minOccurs="1" maxOccurs="1"/>
+            <xs:element name="param" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="argument" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="file" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="archive" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="SUB-WORKFLOW">
+        <xs:sequence>
+            <xs:element name="app-path" type="xs:string" minOccurs="1" maxOccurs="1"/>
+            <xs:element name="propagate-configuration" type="workflow:FLAG" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="configuration" type="workflow:CONFIGURATION" minOccurs="0" maxOccurs="1"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="FS">
+        <xs:sequence>
+            <xs:element name="name-node" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="job-xml" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="configuration" type="workflow:CONFIGURATION" minOccurs="0" maxOccurs="1"/>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+                <xs:element name="delete" type="workflow:DELETE"/>
+                <xs:element name="mkdir" type="workflow:MKDIR"/>
+                <xs:element name="move" type="workflow:MOVE"/>
+                <xs:element name="chmod" type="workflow:CHMOD"/>
+                <xs:element name="touchz" type="workflow:TOUCHZ"/>
+                <xs:element name="chgrp" type="workflow:CHGRP"/>
+            </xs:choice>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="JAVA">
+        <xs:sequence>
+            <xs:element name="job-tracker" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="name-node" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="prepare" type="workflow:PREPARE" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="job-xml" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="configuration" type="workflow:CONFIGURATION" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="main-class" type="xs:string" minOccurs="1" maxOccurs="1"/>
+            <xs:choice minOccurs="0" maxOccurs="1">
+                <xs:element name="java-opts" type="xs:string" minOccurs="1" maxOccurs="1"/>
+                <xs:element name="java-opt" type="xs:string" minOccurs="1" maxOccurs="unbounded"/>
+            </xs:choice>
+            <xs:element name="arg" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="file" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="archive" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="capture-output" type="workflow:FLAG" minOccurs="0" maxOccurs="1"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="FLAG"/>
+
+    <xs:complexType name="CONFIGURATION">
+        <xs:sequence>
+            <xs:element name="property" minOccurs="1" maxOccurs="unbounded">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="name" minOccurs="1" maxOccurs="1" type="xs:string"/>
+                        <xs:element name="value" minOccurs="1" maxOccurs="1" type="xs:string"/>
+                        <xs:element name="description" minOccurs="0" maxOccurs="1" type="xs:string"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="STREAMING">
+        <xs:sequence>
+            <xs:element name="mapper" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="reducer" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="record-reader" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="record-reader-mapping" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="env" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="PIPES">
+        <xs:sequence>
+            <xs:element name="map" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="reduce" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="inputformat" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="partitioner" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="writer" type="xs:string" minOccurs="0" maxOccurs="1"/>
+            <xs:element name="program" type="xs:string" minOccurs="0" maxOccurs="1"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="PREPARE">
+        <xs:sequence>
+            <xs:element name="delete" type="workflow:DELETE" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="mkdir" type="workflow:MKDIR" minOccurs="0" maxOccurs="unbounded"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="DELETE">
+        <xs:attribute name="path" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="MKDIR">
+        <xs:attribute name="path" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="MOVE">
+        <xs:attribute name="source" type="xs:string" use="required"/>
+        <xs:attribute name="target" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="CHMOD">
+        <xs:sequence>
+            <xs:element name="recursive" type="workflow:FLAG" minOccurs="0" maxOccurs="1"></xs:element>
+        </xs:sequence>
+        <xs:attribute name="path" type="xs:string" use="required"/>
+        <xs:attribute name="permissions" type="xs:string" use="required"/>
+        <xs:attribute name="dir-files" type="xs:string"/>
+    </xs:complexType>
+
+    <xs:complexType name="TOUCHZ">
+        <xs:attribute name="path" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <xs:complexType name="CHGRP">
+        <xs:sequence>
+            <xs:element name="recursive" type="workflow:FLAG" minOccurs="0" maxOccurs="1"></xs:element>
+        </xs:sequence>
+        <xs:attribute name="path" type="xs:string" use="required"/>
+        <xs:attribute name="group" type="xs:string" use="required"/>
+        <xs:attribute name="dir-files" type="xs:string"/>
+    </xs:complexType>
+
+    <xs:complexType name="CREDENTIALS">
+        <xs:sequence minOccurs="0" maxOccurs="unbounded">
+            <xs:element name="credential" type="workflow:CREDENTIAL"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="CREDENTIAL">
+        <xs:sequence  minOccurs="0" maxOccurs="unbounded" >
+                 <xs:element name="property" minOccurs="1" maxOccurs="unbounded">
+                    <xs:complexType>
+                       <xs:sequence>
+                            <xs:element name="name" minOccurs="1" maxOccurs="1" type="xs:string"/>
+                            <xs:element name="value" minOccurs="1" maxOccurs="1" type="xs:string"/>
+                            <xs:element name="description" minOccurs="0" maxOccurs="1" type="xs:string"/>
+                       </xs:sequence>
+                    </xs:complexType>
+                 </xs:element>
+        </xs:sequence>
+        <xs:attribute name="name" type="xs:string" use="required"/>
+        <xs:attribute name="type" type="xs:string" use="required"/>
+    </xs:complexType>
+</xs:schema>
+</verbatim>
+
 
 ---++++ Oozie Schema Version 0.4
 <verbatim>
@@ -2642,6 +3056,7 @@ Example of a global element:
     </xs:complexType>
 </xs:schema>
 </verbatim>
+
 ---++++ Oozie Schema Version 0.3
 <verbatim>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:workflow="uri:oozie:workflow:0.3"
@@ -2913,10 +3328,11 @@ Example of a global element:
         <xs:attribute name="name" type="xs:string" use="required"/>
         <xs:attribute name="type" type="xs:string" use="required"/>
     </xs:complexType>
-   	
+
 
 </xs:schema>
 </verbatim>
+
 ---++++ Oozie Schema Version 0.2.5
 <verbatim>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:workflow="uri:oozie:workflow:0.2.5"
@@ -3188,6 +3604,7 @@ Example of a global element:
     </xs:complexType>
 </xs:schema>
 </verbatim>
+
 ---++++ Oozie Schema Version 0.2
 <verbatim>
 <?xml version="1.0" encoding="UTF-8"?>
@@ -3438,9 +3855,45 @@ Example of a global element:
 </xs:schema>
 </verbatim>
 
+#SLASchema
+---++++ Oozie SLA Version 0.2
+   * Supported in Oozie workflow schema version 0.5
+
+<verbatim>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:sla="uri:oozie:sla:0.2" elementFormDefault="qualified"
+           targetNamespace="uri:oozie:sla:0.2">
+
+    <xs:element name="info" type="sla:SLA-INFO"/>
+
+    <xs:complexType name="SLA-INFO">
+        <xs:sequence>
+            <xs:element name="nominal-time" type="xs:string" minOccurs="1"
+                        maxOccurs="1"/>
+            <xs:element name="should-start" type="xs:string" minOccurs="0"
+                        maxOccurs="1"/>
+            <xs:element name="should-end" type="xs:string" minOccurs="1"
+                        maxOccurs="1"/>
+            <xs:element name="max-duration" type="xs:string" minOccurs="0"
+                        maxOccurs="1"/>
+
+            <xs:element name="alert-events" type="xs:string" minOccurs="0"
+                        maxOccurs="1"/>
+            <xs:element name="alert-contact" type="xs:string" minOccurs="0"
+                        maxOccurs="1"/>
+            <xs:element name="notification-msg" type="xs:string" minOccurs="0"
+                        maxOccurs="1"/>
+            <xs:element name="upstream-apps" type="xs:string" minOccurs="0"
+                        maxOccurs="1"/>
+        </xs:sequence>
+    </xs:complexType>
+
+</xs:schema>
+</verbatim>
+
 
 ---++++ Oozie SLA Version 0.1
-   * *Oozie SLA schema is supported in Oozie schema version 0.2*
+   * Oozie SLA schema is supported in Oozie workflow schema version 0.2 onwards
 
 <verbatim>
 <?xml version="1.0" encoding="UTF-8"?>

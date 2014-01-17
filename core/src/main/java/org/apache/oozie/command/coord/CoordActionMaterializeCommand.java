@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.TimeZone;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.oozie.AppType;
 import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.CoordinatorJobBean;
 import org.apache.oozie.ErrorCode;
@@ -35,8 +36,10 @@ import org.apache.oozie.client.SLAEvent.SlaAppType;
 import org.apache.oozie.client.rest.JsonBean;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.coord.TimeUnit;
-import org.apache.oozie.executor.jpa.BulkUpdateInsertJPAExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor.CoordJobQuery;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Service;
@@ -45,13 +48,14 @@ import org.apache.oozie.store.CoordinatorStore;
 import org.apache.oozie.store.StoreException;
 import org.apache.oozie.util.DateUtils;
 import org.apache.oozie.util.Instrumentation;
+import org.apache.oozie.sla.SLAOperations;
 import org.apache.oozie.util.XConfiguration;
 import org.apache.oozie.util.XLog;
 import org.apache.oozie.util.XmlUtils;
 import org.apache.oozie.util.db.SLADbOperations;
 import org.jdom.Element;
-import org.jdom.JDOMException;
 
+@SuppressWarnings("deprecation")
 public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
     private String jobId;
     private Date startTime;
@@ -61,7 +65,7 @@ public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
     private String user;
     private String group;
     private List<JsonBean> insertList = new ArrayList<JsonBean>();
-    private List<JsonBean> updateList = new ArrayList<JsonBean>();
+    private List<UpdateEntry> updateList = new ArrayList<UpdateEntry>();
 
     /**
      * Default timeout for catchup jobs, in minutes, after which coordinator input check will timeout
@@ -105,7 +109,7 @@ public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
             if (job.getStatus() == CoordinatorJob.Status.PREMATER) {
                 job.setStatus(CoordinatorJob.Status.RUNNING);
             }
-            updateList.add(job);
+            updateList.add(new UpdateEntry<CoordJobQuery>(CoordJobQuery.UPDATE_COORD_JOB_STATUS, job));
             return null;
         }
 
@@ -132,7 +136,7 @@ public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
             catch (CommandException ex) {
                 log.warn("Exception occurs:" + ex + " Making the job failed ");
                 job.setStatus(CoordinatorJobBean.Status.FAILED);
-                updateList.add(job);
+                updateList.add(new UpdateEntry<CoordJobQuery>(CoordJobQuery.UPDATE_COORD_JOB_MATERIALIZE, job));
             }
             catch (Exception e) {
                 log.error("Excepion thrown :", e);
@@ -162,7 +166,7 @@ public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
         // TODO: always UTC?
         TimeZone appTz = DateUtils.getTimeZone(jobBean.getTimeZone());
         // TimeZone appTz = DateUtils.getTimeZone("UTC");
-        int frequency = jobBean.getFrequency();
+        int frequency = Integer.valueOf(jobBean.getFrequency());
         TimeUnit freqTU = TimeUnit.valueOf(eJob.getAttributeValue("freq_timeunit"));
         TimeUnit endOfFlag = TimeUnit.valueOf(eJob.getAttributeValue("end_of_duration"));
         Calendar start = Calendar.getInstance(appTz);
@@ -218,7 +222,7 @@ public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
             actionBean.setTimeOut(timeout);
 
             if (!dryrun) {
-                storeToDB(actionBean, action, store); // Storing to table
+                storeToDB(actionBean, action, store, jobBean.getAppName()); // Storing to table
             }
             else {
                 actionStrings.append("action for new instance");
@@ -244,15 +248,15 @@ public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
      * @param actionBean
      * @param actionXml
      * @param store
-     * @param wantSla
-     * @throws StoreException
-     * @throws JDOMException
+     * @param appName
+     * @throws Exception
      */
-    private void storeToDB(CoordinatorActionBean actionBean, String actionXml, CoordinatorStore store) throws Exception {
+    private void storeToDB(CoordinatorActionBean actionBean, String actionXml, CoordinatorStore store, String appName)
+            throws Exception {
         log.debug("In storeToDB() action Id " + actionBean.getId() + " Size of actionXml " + actionXml.length());
         actionBean.setActionXml(actionXml);
         insertList.add(actionBean);
-        createActionRegistration(actionXml, actionBean, store);
+        createActionRegistration(actionXml, actionBean, store, appName);
 
         // TODO: time 100s should be configurable
         queueCallable(new CoordActionNotificationXCommand(actionBean), 100);
@@ -263,10 +267,11 @@ public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
      * @param actionXml
      * @param actionBean
      * @param store
+     * @param appName
      * @throws Exception
      */
-    private void createActionRegistration(String actionXml, CoordinatorActionBean actionBean, CoordinatorStore store)
-            throws Exception {
+    private void createActionRegistration(String actionXml, CoordinatorActionBean actionBean, CoordinatorStore store,
+            String appName) throws Exception {
         Element eAction = XmlUtils.parseXml(actionXml);
         Element eSla = eAction.getChild("action", eAction.getNamespace()).getChild("info", eAction.getNamespace("sla"));
         SLAEventBean slaEvent = SLADbOperations.createSlaRegistrationEvent(eSla, store, actionBean.getId(),
@@ -274,6 +279,9 @@ public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
         if(slaEvent != null) {
             insertList.add(slaEvent);
         }
+        // insert into new sla reg table too
+        SLAOperations.createSlaRegistrationEvent(eSla, actionBean.getId(), actionBean.getJobId(),
+                AppType.COORDINATOR_ACTION, user, appName, log, false);
     }
 
     /**
@@ -298,7 +306,7 @@ public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
             log.info("[" + job.getId() + "]: Update status from PREMATER to RUNNING");
         }
         job.setNextMaterializedTime(endTime);
-        updateList.add(job);
+        updateList.add(new UpdateEntry<CoordJobQuery>(CoordJobQuery.UPDATE_COORD_JOB_MATERIALIZE, job));
     }
 
     @Override
@@ -311,7 +319,7 @@ public class CoordActionMaterializeCommand extends CoordinatorCommand<Void> {
                 JPAService jpaService = Services.get().get(JPAService.class);
                 if (jpaService != null) {
                     try {
-                        jpaService.execute(new BulkUpdateInsertJPAExecutor(updateList, insertList));
+                        BatchQueryExecutor.getInstance().executeBatchInsertUpdateDelete(insertList, updateList, null);
                     }
                     catch (JPAExecutorException je) {
                         throw new CommandException(je);

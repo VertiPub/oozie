@@ -17,6 +17,7 @@
  */
 package org.apache.oozie.command.coord;
 
+import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.client.CoordinatorJob;
 import org.apache.oozie.client.Job;
 import org.apache.oozie.CoordinatorActionBean;
@@ -28,16 +29,22 @@ import org.apache.oozie.command.wf.KillXCommand;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.KillTransitionXCommand;
 import org.apache.oozie.command.PreconditionException;
-import org.apache.oozie.executor.jpa.BulkUpdateInsertForCoordActionStatusJPAExecutor;
+import org.apache.oozie.dependency.DependencyChecker;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor.CoordActionQuery;
 import org.apache.oozie.executor.jpa.CoordJobGetActionsNotCompletedJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor.CoordJobQuery;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
+import org.apache.oozie.service.EventHandlerService;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.util.LogUtils;
 import org.apache.oozie.util.ParamChecker;
 import org.apache.oozie.util.StatusUtils;
 
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 
@@ -62,6 +69,11 @@ public class CoordKillXCommand extends KillTransitionXCommand {
     @Override
     public String getEntityKey() {
         return this.jobId;
+    }
+
+    @Override
+    public String getKey() {
+        return getName() + "_" + this.jobId;
     }
 
     @Override
@@ -102,6 +114,7 @@ public class CoordKillXCommand extends KillTransitionXCommand {
     }
 
     private void updateCoordAction(CoordinatorActionBean action, boolean makePending) {
+        CoordinatorAction.Status prevStatus = action.getStatus();
         action.setStatus(CoordinatorActionBean.Status.KILLED);
         if (makePending) {
             action.incrementAndGetPending();
@@ -109,8 +122,12 @@ public class CoordKillXCommand extends KillTransitionXCommand {
             // set pending to false
             action.setPending(0);
         }
+        if (EventHandlerService.isEnabled() && prevStatus != CoordinatorAction.Status.RUNNING
+                && prevStatus != CoordinatorAction.Status.SUSPENDED) {
+            CoordinatorXCommand.generateEvent(action, coordJob.getUser(), coordJob.getAppName(), null);
+        }
         action.setLastModifiedTime(new Date());
-        updateList.add(action);
+        updateList.add(new UpdateEntry<CoordActionQuery>(CoordActionQuery.UPDATE_COORD_ACTION_STATUS_PENDING_TIME,action));
     }
 
     @Override
@@ -132,11 +149,14 @@ public class CoordKillXCommand extends KillTransitionXCommand {
                     LOG.debug("Killed coord action = [{0}], current status = [{1}], pending = [{2}]",
                             action.getId(), action.getStatus(), action.getPending());
                 }
+                String pushMissingDeps = action.getPushMissingDependencies();
+                if (pushMissingDeps != null) {
+                    CoordPushDependencyCheckXCommand.unregisterMissingDependencies(
+                            Arrays.asList(DependencyChecker.dependenciesAsArray(pushMissingDeps)), action.getId());
+                }
             }
         }
-
-        updateList.add(coordJob);
-
+        coordJob.setDoneMaterialization();
         LOG.debug("Killed coord actions for the coordinator=[{0}]", jobId);
     }
 
@@ -151,36 +171,22 @@ public class CoordKillXCommand extends KillTransitionXCommand {
 
     @Override
     public void updateJob() throws CommandException {
-        updateList.add(coordJob);
+        updateList.add(new UpdateEntry<CoordJobQuery>(CoordJobQuery.UPDATE_COORD_JOB_STATUS_PENDING_TIME, coordJob));
     }
 
-    /* (non-Javadoc)
-     * @see org.apache.oozie.command.KillTransitionXCommand#performWrites()
-     */
     @Override
     public void performWrites() throws CommandException {
         try {
-            jpaService.execute(new BulkUpdateInsertForCoordActionStatusJPAExecutor(updateList, null));
+            BatchQueryExecutor.getInstance().executeBatchInsertUpdateDelete(null, updateList, null);
         }
         catch (JPAExecutorException e) {
             throw new CommandException(e);
         }
     }
 
-    /* (non-Javadoc)
-     * @see org.apache.oozie.command.TransitionXCommand#getJob()
-     */
     @Override
     public Job getJob() {
         return coordJob;
-    }
-
-    /* (non-Javadoc)
-     * @see org.apache.oozie.command.XCommand#getKey()
-     */
-    @Override
-    public String getKey(){
-        return getName() + "_" + jobId;
     }
 
 }

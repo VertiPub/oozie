@@ -30,6 +30,7 @@ import org.apache.oozie.WorkflowJobBean;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
 import org.apache.oozie.service.DagEngineService;
+import org.apache.oozie.service.EventHandlerService;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.util.JobUtils;
@@ -42,9 +43,12 @@ import org.apache.oozie.util.db.SLADbOperations;
 import org.apache.oozie.client.SLAEvent.SlaAppType;
 import org.apache.oozie.client.SLAEvent.Status;
 import org.apache.oozie.client.rest.JsonBean;
-import org.apache.oozie.executor.jpa.BulkUpdateInsertForCoordActionStartJPAExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor.CoordActionQuery;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.executor.jpa.WorkflowJobGetJPAExecutor;
+import org.apache.oozie.executor.jpa.WorkflowJobQueryExecutor.WorkflowJobQuery;
 import org.jdom.Element;
 import org.jdom.JDOMException;
 
@@ -52,8 +56,11 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
+@SuppressWarnings("deprecation")
 public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
 
     public static final String EL_ERROR = "EL_ERROR";
@@ -65,19 +72,19 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
     private final XLog log = getLog();
     private String actionId = null;
     private String user = null;
-    private String authToken = null;
+    private String appName = null;
     private CoordinatorActionBean coordAction = null;
     private JPAService jpaService = null;
     private String jobId = null;
-    private List<JsonBean> updateList = new ArrayList<JsonBean>();
+    private List<UpdateEntry> updateList = new ArrayList<UpdateEntry>();
     private List<JsonBean> insertList = new ArrayList<JsonBean>();
 
-    public CoordActionStartXCommand(String id, String user, String token, String jobId) {
+    public CoordActionStartXCommand(String id, String user, String appName, String jobId) {
         //super("coord_action_start", "coord_action_start", 1, XLog.OPS);
         super("coord_action_start", "coord_action_start", 1);
         this.actionId = ParamChecker.notEmpty(id, "id");
         this.user = ParamChecker.notEmpty(user, "user");
-        this.authToken = ParamChecker.notEmpty(token, "token");
+        this.appName = ParamChecker.notEmpty(appName, "appName");
         this.jobId = jobId;
     }
 
@@ -118,7 +125,7 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
         // extract 'property' tags under 'configuration' block in the
         // coordinator.xml (saved in actionxml column)
         // convert Element to XConfiguration
-        Element configElement = (Element) workflowProperties.getChild("action", workflowProperties.getNamespace())
+        Element configElement = workflowProperties.getChild("action", workflowProperties.getNamespace())
                 .getChild("workflow", workflowProperties.getNamespace()).getChild("configuration",
                                                                                   workflowProperties.getNamespace());
         if (configElement != null) {
@@ -152,7 +159,6 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
         String errCode = "";
         String errMsg = "";
         ParamChecker.notEmpty(user, "user");
-        ParamChecker.notEmpty(authToken, "authToken");
 
         log.debug("actionid=" + actionId + ", status=" + coordAction.getStatus());
         if (coordAction.getStatus() == CoordinatorAction.Status.SUBMITTED) {
@@ -162,9 +168,8 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
             coordAction.setRunConf(XmlUtils.prettyPrint(runConf).toString());
             // log.debug("%%% merged runconf=" +
             // XmlUtils.prettyPrint(runConf).toString());
-            DagEngine dagEngine = Services.get().get(DagEngineService.class).getDagEngine(user, authToken);
+            DagEngine dagEngine = Services.get().get(DagEngineService.class).getDagEngine(user);
             try {
-                boolean startJob = true;
                 Configuration conf = new XConfiguration(new StringReader(coordAction.getRunConf()));
                 SLAEventBean slaEvent = SLADbOperations.createStatusEvent(coordAction.getSlaXml(), coordAction.getId(), Status.STARTED,
                         SlaAppType.COORDINATOR_ACTION, log);
@@ -174,7 +179,7 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
 
                 // Normalize workflow appPath here;
                 JobUtils.normalizeAppPath(conf.get(OozieClient.USER_NAME), conf.get(OozieClient.GROUP_NAME), conf);
-                String wfId = dagEngine.submitJob(conf, startJob);
+                String wfId = dagEngine.submitJobFromCoordinator(conf, actionId);
                 coordAction.setStatus(CoordinatorAction.Status.RUNNING);
                 coordAction.setExternalId(wfId);
                 coordAction.incrementAndGetPending();
@@ -186,10 +191,16 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
                     WorkflowJobBean wfJob = jpaService.execute(new WorkflowJobGetJPAExecutor(wfId));
                     wfJob.setParentId(actionId);
                     wfJob.setLastModifiedTime(new Date());
-                    updateList.add(wfJob);
-                    updateList.add(coordAction);
+                    BatchQueryExecutor executor = BatchQueryExecutor.getInstance();
+                    updateList.add(new UpdateEntry<WorkflowJobQuery>(
+                            WorkflowJobQuery.UPDATE_WORKFLOW_PARENT_MODIFIED, wfJob));
+                    updateList.add(new UpdateEntry<CoordActionQuery>(
+                            CoordActionQuery.UPDATE_COORD_ACTION_FOR_START, coordAction));
                     try {
-                        jpaService.execute(new BulkUpdateInsertForCoordActionStartJPAExecutor(updateList, insertList));
+                        executor.executeBatchInsertUpdateDelete(insertList, updateList, null);
+                        if (EventHandlerService.isEnabled()) {
+                            generateEvent(coordAction, user, appName, wfJob.getStartTime());
+                        }
                     }
                     catch (JPAExecutorException je) {
                         throw new CommandException(je);
@@ -231,8 +242,9 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
                     coordAction.setErrorMessage(errMsg);
                     coordAction.setErrorCode(errCode);
 
-                    updateList = new ArrayList<JsonBean>();
-                    updateList.add(coordAction);
+                    updateList = new ArrayList<UpdateEntry>();
+                    updateList.add(new UpdateEntry<CoordActionQuery>(
+                                    CoordActionQuery.UPDATE_COORD_ACTION_FOR_START, coordAction));
                     insertList = new ArrayList<JsonBean>();
 
                     SLAEventBean slaEvent = SLADbOperations.createStatusEvent(coordAction.getSlaXml(), coordAction.getId(), Status.FAILED,
@@ -242,7 +254,10 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
                     }
                     try {
                         // call JPAExecutor to do the bulk writes
-                        jpaService.execute(new BulkUpdateInsertForCoordActionStartJPAExecutor(updateList, insertList));
+                        BatchQueryExecutor.getInstance().executeBatchInsertUpdateDelete(insertList, updateList, null);
+                        if (EventHandlerService.isEnabled()) {
+                            generateEvent(coordAction, user, appName, null);
+                        }
                     }
                     catch (JPAExecutorException je) {
                         throw new CommandException(je);
@@ -266,7 +281,7 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
 
     @Override
     protected void loadState() throws CommandException {
-
+        eagerLoadState();
     }
 
     @Override
@@ -291,5 +306,10 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
             throw new PreconditionException(ErrorCode.E1100, "The coord action [" + actionId + "] must have status "
                     + CoordinatorAction.Status.SUBMITTED.name() + " but has status [" + coordAction.getStatus().name() + "]");
         }
+    }
+
+    @Override
+    public String getKey(){
+        return getName() + "_" + actionId;
     }
 }

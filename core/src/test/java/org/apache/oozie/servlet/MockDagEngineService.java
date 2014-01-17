@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,19 +22,22 @@ import java.io.Writer;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.DagEngine;
 import org.apache.oozie.DagEngineException;
 import org.apache.oozie.ErrorCode;
+import org.apache.oozie.WorkflowActionBean;
+import org.apache.oozie.WorkflowJobBean;
 import org.apache.oozie.WorkflowsInfo;
 import org.apache.oozie.client.WorkflowJob;
-import org.apache.oozie.client.rest.JsonWorkflowAction;
-import org.apache.oozie.client.rest.JsonWorkflowJob;
+import org.apache.oozie.client.rest.JMSConnectionInfoBean;
 import org.apache.oozie.client.rest.RestConstants;
 import org.apache.oozie.service.DagEngineService;
 import org.apache.oozie.util.XmlUtils;
+import org.json.simple.JSONValue;
 
 public class MockDagEngineService extends DagEngineService {
     public static final String JOB_ID = "job-";
@@ -78,8 +81,8 @@ public class MockDagEngineService extends DagEngineService {
     }
 
     @Override
-    public DagEngine getDagEngine(String user, String authToken) {
-        return new MockDagEngine(user, authToken);
+    public DagEngine getDagEngine(String user) {
+        return new MockDagEngine(user);
     }
 
     private static class MockDagEngine extends DagEngine {
@@ -87,8 +90,8 @@ public class MockDagEngineService extends DagEngineService {
         public MockDagEngine() {
         }
 
-        public MockDagEngine(String user, String authToken) {
-            super(user, authToken);
+        public MockDagEngine(String user) {
+            super(user);
         }
 
         @Override
@@ -184,7 +187,7 @@ public class MockDagEngineService extends DagEngineService {
         }
 
         @Override
-        public void streamLog(String jobId, Writer writer) throws IOException, DagEngineException {
+        public void streamLog(String jobId, Writer writer, Map<String, String[]> params) throws IOException, DagEngineException {
             did = RestConstants.JOB_SHOW_LOG;
             validateWorkflowIdx(jobId);
             writer.write(LOG);
@@ -227,8 +230,18 @@ public class MockDagEngineService extends DagEngineService {
         }
     }
 
+    private static JMSConnectionInfoBean createDummyJMSConnectionInfo() {
+        JMSConnectionInfoBean jmsBean = new JMSConnectionInfoBean();
+        Properties jmsProps = new Properties();
+        jmsProps.setProperty("k1", "v1");
+        jmsProps.setProperty("k2", "v2");
+        jmsBean.setJNDIProperties(jmsProps);
+        jmsBean.setTopicPrefix("topicPrefix");
+        return jmsBean;
+    }
+
     private static WorkflowJob createDummyWorkflow(int idx) {
-        JsonWorkflowJob workflow = new JsonWorkflowJob();
+        WorkflowJobBean workflow = new WorkflowJobBean();
         workflow.setId(JOB_ID + idx + JOB_ID_END);
         workflow.setAppPath("hdfs://blah/blah/" + idx + "-blah");
         workflow.setStatus((idx % 2) == 0 ? WorkflowJob.Status.RUNNING : WorkflowJob.Status.SUCCEEDED);
@@ -241,7 +254,7 @@ public class MockDagEngineService extends DagEngineService {
         workflow.setGroup(GROUP);
         workflow.setUser(USER);
 
-        List<JsonWorkflowAction> actions = new ArrayList<JsonWorkflowAction>();
+        List<WorkflowActionBean> actions = new ArrayList<WorkflowActionBean>();
         for (int i = 0; i < idx; i++) {
             actions.add(createDummyAction(i));
         }
@@ -251,7 +264,7 @@ public class MockDagEngineService extends DagEngineService {
     }
 
     private static WorkflowJob createDummyWorkflow(int idx, String conf) {
-        JsonWorkflowJob workflow = new JsonWorkflowJob();
+        WorkflowJobBean workflow = new WorkflowJobBean();
         workflow.setId(JOB_ID + idx + JOB_ID_END);
         workflow.setAppPath("hdfs://blah/blah/" + idx + "-blah");
         workflow.setStatus((idx % 2) == 0 ? WorkflowJob.Status.RUNNING : WorkflowJob.Status.SUCCEEDED);
@@ -264,7 +277,7 @@ public class MockDagEngineService extends DagEngineService {
         workflow.setGroup(GROUP);
         workflow.setUser(USER);
 
-        List<JsonWorkflowAction> actions = new ArrayList<JsonWorkflowAction>();
+        List<WorkflowActionBean> actions = new ArrayList<WorkflowActionBean>();
         for (int i = 0; i < idx; i++) {
             actions.add(createDummyAction(i));
         }
@@ -273,8 +286,8 @@ public class MockDagEngineService extends DagEngineService {
         return workflow;
     }
 
-    private static JsonWorkflowAction createDummyAction(int idx) {
-        JsonWorkflowAction action = new JsonWorkflowAction();
+    private static WorkflowActionBean createDummyAction(int idx) {
+        WorkflowActionBean action = new WorkflowActionBean();
         int mod = idx % 5;
         action.setId(ACTION_ID + idx);
         action.setExternalId(EXT_ID + idx);

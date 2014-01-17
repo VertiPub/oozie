@@ -36,7 +36,6 @@ import org.apache.oozie.action.ActionExecutor;
 import org.apache.oozie.client.WorkflowAction;
 import org.apache.oozie.client.WorkflowJob;
 import org.apache.oozie.command.CommandException;
-import org.apache.oozie.command.coord.CoordActionUpdateXCommand;
 import org.apache.oozie.service.CallbackService;
 import org.apache.oozie.service.ELService;
 import org.apache.oozie.service.HadoopAccessorException;
@@ -129,8 +128,7 @@ public abstract class ActionXCommand<T> extends WorkflowXCommand<Void> {
             throw new CommandException(ErrorCode.E0727, id, e.getMessage());
         }
         finally {
-            // update coordinator action
-            new CoordActionUpdateXCommand(workflow, 3).call();
+            updateParentIfNecessary(workflow, 3);
         }
     }
 
@@ -174,8 +172,18 @@ public abstract class ActionXCommand<T> extends WorkflowXCommand<Void> {
     public void failJob(ActionExecutor.Context context) throws CommandException {
         ActionExecutorContext aContext = (ActionExecutorContext) context;
         WorkflowActionBean action = (WorkflowActionBean) aContext.getAction();
-        WorkflowJobBean workflow = (WorkflowJobBean) context.getWorkflow();
+        failJob(context, action);
+    }
 
+    /**
+     * Fail the job due to failed action
+     *
+     * @param context the execution context.
+     * @param action the action that caused the workflow to fail
+     * @throws CommandException thrown if unable to fail job
+     */
+    public void failJob(ActionExecutor.Context context, WorkflowActionBean action) throws CommandException {
+        WorkflowJobBean workflow = (WorkflowJobBean) context.getWorkflow();
         if (!handleUserRetry(action)) {
             incrActionErrorCounter(action.getType(), "failed", 1);
             LOG.warn("Failing Job due to failed action [{0}]", action.getName());

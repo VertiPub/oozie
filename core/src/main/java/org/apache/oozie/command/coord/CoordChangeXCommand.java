@@ -30,6 +30,7 @@ import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.CoordinatorJobBean;
 import org.apache.oozie.ErrorCode;
 import org.apache.oozie.XException;
+import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.client.CoordinatorJob;
 import org.apache.oozie.client.Job;
 import org.apache.oozie.client.OozieClient;
@@ -38,13 +39,20 @@ import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
 import org.apache.oozie.command.bundle.BundleStatusUpdateXCommand;
 import org.apache.oozie.coord.TimeUnit;
-import org.apache.oozie.executor.jpa.BulkUpdateDeleteJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordActionGetJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetActionByActionNumberJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor.CoordJobQuery;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
+import org.apache.oozie.executor.jpa.sla.SLARegistrationGetJPAExecutor;
+import org.apache.oozie.executor.jpa.sla.SLASummaryGetJPAExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
+import org.apache.oozie.sla.SLARegistrationBean;
+import org.apache.oozie.sla.SLASummaryBean;
+import org.apache.oozie.sla.service.SLAService;
 import org.apache.oozie.util.DateUtils;
 import org.apache.oozie.util.JobUtils;
 import org.apache.oozie.util.LogUtils;
@@ -61,7 +69,7 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
     private CoordinatorJobBean coordJob;
     private JPAService jpaService = null;
     private Job.Status prevStatus;
-    private List<JsonBean> updateList = new ArrayList<JsonBean>();
+    private List<UpdateEntry> updateList = new ArrayList<UpdateEntry>();
     private List<JsonBean> deleteList = new ArrayList<JsonBean>();
 
     private static final Set<String> ALLOWED_CHANGE_OPTIONS = new HashSet<String>();
@@ -160,7 +168,7 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
         Calendar d = Calendar.getInstance(DateUtils.getTimeZone(coordJob.getTimeZone()));
         d.setTime(coordJob.getLastActionTime());
         TimeUnit timeUnit = TimeUnit.valueOf(coordJob.getTimeUnitStr());
-        d.add(timeUnit.getCalendarUnit(), -coordJob.getFrequency());
+        d.add(timeUnit.getCalendarUnit(), -Integer.valueOf(coordJob.getFrequency()));
         return d.getTime();
     }
 
@@ -227,7 +235,7 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
             while (true) {
                 if (!newPauseTime.after(d.getTime())) {
                     deleteAction(lastActionNumber);
-                    d.add(timeUnit.getCalendarUnit(), -coordJob.getFrequency());
+                    d.add(timeUnit.getCalendarUnit(), -Integer.valueOf(coordJob.getFrequency()));
                     lastActionNumber = lastActionNumber - 1;
 
                     hasChanged = true;
@@ -239,7 +247,7 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
 
             if (hasChanged == true) {
                 coordJob.setLastActionNumber(lastActionNumber);
-                d.add(timeUnit.getCalendarUnit(), coordJob.getFrequency());
+                d.add(timeUnit.getCalendarUnit(), Integer.valueOf(coordJob.getFrequency()));
                 Date d1 = d.getTime();
                 coordJob.setLastActionTime(d1);
                 coordJob.setNextMaterializedTime(d1);
@@ -257,8 +265,29 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
         try {
             String actionId = jpaService.execute(new CoordJobGetActionByActionNumberJPAExecutor(jobId, actionNum));
             CoordinatorActionBean bean = jpaService.execute(new CoordActionGetJPAExecutor(actionId));
-            deleteList.add(bean);
-        } catch (JPAExecutorException e) {
+            // delete SLA registration entry (if any) for action
+            if (SLAService.isEnabled()) {
+                Services.get().get(SLAService.class).removeRegistration(actionId);
+            }
+            SLARegistrationBean slaReg = jpaService.execute(new SLARegistrationGetJPAExecutor(actionId));
+            if (slaReg != null) {
+                LOG.debug("Deleting registration bean corresponding to action " + slaReg.getId());
+                deleteList.add(slaReg);
+            }
+            SLASummaryBean slaSummaryBean = jpaService.execute(new SLASummaryGetJPAExecutor(actionId));
+            if (slaSummaryBean != null) {
+                LOG.debug("Deleting summary bean corresponding to action " + slaSummaryBean.getId());
+                deleteList.add(slaSummaryBean);
+            }
+            if (bean.getStatus() == CoordinatorAction.Status.WAITING
+                    || bean.getStatus() == CoordinatorAction.Status.READY) {
+                deleteList.add(bean);
+            }
+            else {
+                throw new CommandException(ErrorCode.E1022, bean.getId());
+            }
+        }
+        catch (JPAExecutorException e) {
             throw new CommandException(e);
         }
     }
@@ -347,8 +376,8 @@ public class CoordChangeXCommand extends CoordinatorXCommand<Void> {
                 coordJob.setDoneMaterialization();
             }
 
-            updateList.add(coordJob);
-            jpaService.execute(new BulkUpdateDeleteJPAExecutor(updateList, deleteList, false));
+            updateList.add(new UpdateEntry<CoordJobQuery>(CoordJobQuery.UPDATE_COORD_JOB_CHANGE, coordJob));
+            BatchQueryExecutor.getInstance().executeBatchInsertUpdateDelete(null, updateList, deleteList);
 
             return null;
         }

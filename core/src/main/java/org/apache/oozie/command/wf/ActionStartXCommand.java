@@ -40,12 +40,15 @@ import org.apache.oozie.client.SLAEvent.Status;
 import org.apache.oozie.client.rest.JsonBean;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
-import org.apache.oozie.command.coord.CoordActionUpdateXCommand;
-import org.apache.oozie.executor.jpa.BulkUpdateInsertJPAExecutor;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.executor.jpa.WorkflowActionGetJPAExecutor;
 import org.apache.oozie.executor.jpa.WorkflowJobGetJPAExecutor;
+import org.apache.oozie.executor.jpa.WorkflowActionQueryExecutor.WorkflowActionQuery;
+import org.apache.oozie.executor.jpa.WorkflowJobQueryExecutor.WorkflowJobQuery;
 import org.apache.oozie.service.ActionService;
+import org.apache.oozie.service.EventHandlerService;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.service.UUIDService;
@@ -56,6 +59,7 @@ import org.apache.oozie.util.XLog;
 import org.apache.oozie.util.XmlUtils;
 import org.apache.oozie.util.db.SLADbXOperations;
 
+@SuppressWarnings("deprecation")
 public class ActionStartXCommand extends ActionXCommand<Void> {
     public static final String EL_ERROR = "EL_ERROR";
     public static final String EL_EVAL_ERROR = "EL_EVAL_ERROR";
@@ -69,7 +73,7 @@ public class ActionStartXCommand extends ActionXCommand<Void> {
     private WorkflowActionBean wfAction = null;
     private JPAService jpaService = null;
     private ActionExecutor executor = null;
-    private List<JsonBean> updateList = new ArrayList<JsonBean>();
+    private List<UpdateEntry> updateList = new ArrayList<UpdateEntry>();
     private List<JsonBean> insertList = new ArrayList<JsonBean>();
 
     public ActionStartXCommand(String actionId, String type) {
@@ -126,7 +130,7 @@ public class ActionStartXCommand extends ActionXCommand<Void> {
             }
         }
         else {
-            throw new PreconditionException(ErrorCode.E0816, wfAction.getPending(), wfAction.getStatusStr());
+            throw new PreconditionException(ErrorCode.E0816, wfAction.isPending(), wfAction.getStatusStr());
         }
 
         executor = Services.get().get(ActionService.class).getExecutor(wfAction.getType());
@@ -158,10 +162,12 @@ public class ActionStartXCommand extends ActionXCommand<Void> {
             if (wfAction.getStatus() == WorkflowActionBean.Status.START_RETRY
                     || wfAction.getStatus() == WorkflowActionBean.Status.START_MANUAL) {
                 isRetry = true;
+                prepareForRetry(wfAction);
             }
             boolean isUserRetry = false;
             if (wfAction.getStatus() == WorkflowActionBean.Status.USER_RETRY) {
                 isUserRetry = true;
+                prepareForRetry(wfAction);
             }
             context = new ActionXCommand.ActionExecutorContext(wfJob, wfAction, isRetry, isUserRetry);
             boolean caught = false;
@@ -239,9 +245,9 @@ public class ActionStartXCommand extends ActionXCommand<Void> {
 
                 LOG.warn(XLog.STD, "[***" + wfAction.getId() + "***]" + "Action status=" + wfAction.getStatusStr());
 
-                updateList.add(wfAction);
+                updateList.add(new UpdateEntry<WorkflowActionQuery>(WorkflowActionQuery.UPDATE_ACTION_START, wfAction));
                 wfJob.setLastModifiedTime(new Date());
-                updateList.add(wfJob);
+                updateList.add(new UpdateEntry<WorkflowJobQuery>(WorkflowJobQuery.UPDATE_WORKFLOW_STATUS_INSTANCE_MODIFIED, wfJob));
                 // Add SLA status event (STARTED) for WF_ACTION
                 SLAEventBean slaEvent = SLADbXOperations.createStatusEvent(wfAction.getSlaXml(), wfAction.getId(), Status.STARTED,
                         SlaAppType.WORKFLOW_ACTION);
@@ -274,8 +280,7 @@ public class ActionStartXCommand extends ActionXCommand<Void> {
                 case FAILED:
                     try {
                         failJob(context);
-                        // update coordinator action
-                        new CoordActionUpdateXCommand(wfJob, 3).call();
+                        updateParentIfNecessary(wfJob, 3);
                         new WfEndXCommand(wfJob).call(); // To delete the WF temp dir
                         SLAEventBean slaEvent1 = SLADbXOperations.createStatusEvent(wfAction.getSlaXml(), wfAction.getId(), Status.FAILED,
                                 SlaAppType.WORKFLOW_ACTION);
@@ -293,13 +298,16 @@ public class ActionStartXCommand extends ActionXCommand<Void> {
                     }
                     break;
             }
-            updateList.add(wfAction);
+            updateList.add(new UpdateEntry<WorkflowActionQuery>(WorkflowActionQuery.UPDATE_ACTION_START, wfAction));
             wfJob.setLastModifiedTime(new Date());
-            updateList.add(wfJob);
+            updateList.add(new UpdateEntry<WorkflowJobQuery>(WorkflowJobQuery.UPDATE_WORKFLOW_STATUS_INSTANCE_MODIFIED, wfJob));
         }
         finally {
             try {
-                jpaService.execute(new BulkUpdateInsertJPAExecutor(updateList, insertList));
+                BatchQueryExecutor.getInstance().executeBatchInsertUpdateDelete(insertList, updateList, null);
+                if (!(executor instanceof ControlNodeActionExecutor) && EventHandlerService.isEnabled()) {
+                    generateEvent(wfAction, wfJob.getUser());
+                }
             }
             catch (JPAExecutorException e) {
                 throw new CommandException(e);
@@ -314,9 +322,9 @@ public class ActionStartXCommand extends ActionXCommand<Void> {
     private void handleError(ActionExecutorContext context, WorkflowJobBean workflow, WorkflowActionBean action)
             throws CommandException {
         failJob(context);
-        updateList.add(wfAction);
+        updateList.add(new UpdateEntry<WorkflowActionQuery>(WorkflowActionQuery.UPDATE_ACTION_START, wfAction));
         wfJob.setLastModifiedTime(new Date());
-        updateList.add(wfJob);
+        updateList.add(new UpdateEntry<WorkflowJobQuery>(WorkflowJobQuery.UPDATE_WORKFLOW_STATUS_INSTANCE_MODIFIED, wfJob));
         SLAEventBean slaEvent1 = SLADbXOperations.createStatusEvent(action.getSlaXml(), action.getId(),
                 Status.FAILED, SlaAppType.WORKFLOW_ACTION);
         if(slaEvent1 != null) {
@@ -327,8 +335,7 @@ public class ActionStartXCommand extends ActionXCommand<Void> {
         if(slaEvent2 != null) {
             insertList.add(slaEvent2);
         }
-        // update coordinator action
-        new CoordActionUpdateXCommand(workflow, 3).call();
+
         new WfEndXCommand(wfJob).call(); //To delete the WF temp dir
         return;
     }
@@ -339,6 +346,13 @@ public class ActionStartXCommand extends ActionXCommand<Void> {
     @Override
     public String getKey(){
         return getName() + "_" + actionId;
+    }
+
+    private void prepareForRetry(WorkflowActionBean wfAction) {
+        if (wfAction.getType().equals("map-reduce")) {
+            // need to delete child job id of original run
+            wfAction.setExternalChildIDs("");
+        }
     }
 
 }

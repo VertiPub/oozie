@@ -21,12 +21,15 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileReader;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.URL;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -53,13 +56,33 @@ import org.apache.oozie.CoordinatorJobBean;
 import org.apache.oozie.SLAEventBean;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
+import org.apache.oozie.dependency.FSURIHandler;
+import org.apache.oozie.dependency.HCatURIHandler;
+import org.apache.oozie.executor.jpa.BatchQueryExecutor;
+import org.apache.oozie.executor.jpa.BundleActionQueryExecutor;
+import org.apache.oozie.executor.jpa.BundleJobQueryExecutor;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor;
+import org.apache.oozie.executor.jpa.SLARegistrationQueryExecutor;
+import org.apache.oozie.executor.jpa.SLASummaryQueryExecutor;
+import org.apache.oozie.executor.jpa.WorkflowActionQueryExecutor;
+import org.apache.oozie.executor.jpa.WorkflowJobQueryExecutor;
 import org.apache.oozie.service.ConfigurationService;
+import org.apache.oozie.service.HCatAccessorService;
 import org.apache.oozie.service.HadoopAccessorService;
+import org.apache.oozie.service.JMSAccessorService;
+import org.apache.oozie.service.PartitionDependencyManagerService;
+import org.apache.oozie.service.ServiceException;
 import org.apache.oozie.service.Services;
+import org.apache.oozie.service.URIHandlerService;
+import org.apache.oozie.sla.SLARegistrationBean;
+import org.apache.oozie.sla.SLASummaryBean;
 import org.apache.oozie.store.CoordinatorStore;
 import org.apache.oozie.store.StoreException;
+import org.apache.oozie.test.MiniHCatServer.RUNMODE;
 import org.apache.oozie.util.IOUtils;
 import org.apache.oozie.util.ParamChecker;
+import org.apache.oozie.util.XConfiguration;
 import org.apache.oozie.util.XLog;
 
 /**
@@ -85,10 +108,12 @@ public abstract class XTestCase extends TestCase {
     private String hadoopVersion;
     protected XLog log = new XLog(LogFactory.getLog(getClass()));
 
-    private static File OOZIE_SRC_DIR = null;
+    protected static File OOZIE_SRC_DIR = null;
     private static final String OOZIE_TEST_PROPERTIES = "oozie.test.properties";
 
     public static float WAITFOR_RATIO = Float.parseFloat(System.getProperty("oozie.test.waitfor.ratio", "1"));
+    protected static final String localActiveMQBroker = "vm://localhost?broker.persistent=false";
+    protected static final String ActiveMQConnFactory = "org.apache.activemq.jndi.ActiveMQInitialContextFactory";
 
     static {
         try {
@@ -203,6 +228,12 @@ public abstract class XTestCase extends TestCase {
     public static final String TEST_GROUP_PROP = "oozie.test.group";
 
     /**
+     * System property that specifies the test groiup used by the tests.
+     * The default value of this property is <tt>testg</tt>.
+     */
+    public static final String TEST_GROUP_PROP2 = "oozie.test.group2";
+
+    /**
      * System property that specifies the wait time, in seconds, between testcases before
      * triggering a shutdown. The default value is 10 sec.
      */
@@ -241,7 +272,6 @@ public abstract class XTestCase extends TestCase {
             System.exit(-1);
         }
         hadoopVersion = System.getProperty(HADOOP_VERSION, "0.20.0");
-        sysProps = new HashMap<String, String>();
         testCaseDir = createTestCaseDir(this, true);
 
         //setting up Oozie HOME and Oozie conf directory
@@ -257,21 +287,37 @@ public abstract class XTestCase extends TestCase {
         File source = (customOozieSite.startsWith("/"))
                       ? new File(customOozieSite) : new File(OOZIE_SRC_DIR, customOozieSite);
         source = source.getAbsoluteFile();
-        // If we can't find it, try using the class loader (useful if we're using XTestCase from outside core)
-        if (!source.exists()) {
-            source = new File(getClass().getClassLoader().getResource(oozieTestDB + "-oozie-site.xml").getPath());
-            source = source.getAbsoluteFile();
+        InputStream oozieSiteSourceStream = null;
+        if (source.exists()) {
+            oozieSiteSourceStream = new FileInputStream(source);
         }
-        // If we still can't find it, then exit
-        if (!source.exists()) {
-            System.err.println();
-            System.err.println(XLog.format("Custom configuration file for testing does no exist [{0}]",
-                                           source.getAbsolutePath()));
-            System.err.println();
-            System.exit(-1);
+        else {
+            // If we can't find it, try using the class loader (useful if we're using XTestCase from outside core)
+            URL sourceURL = getClass().getClassLoader().getResource(oozieTestDB + "-oozie-site.xml");
+            if (sourceURL != null) {
+                oozieSiteSourceStream = sourceURL.openStream();
+            }
+            else {
+                // If we still can't find it, then exit
+                System.err.println();
+                System.err.println(XLog.format("Custom configuration file for testing does no exist [{0}]",
+                                               source.getAbsolutePath()));
+                System.err.println();
+                System.exit(-1);
+            }
         }
+        // Copy the specified oozie-site file from oozieSiteSourceStream to the test case dir as oozie-site.xml
+        Configuration oozieSiteConf = new Configuration(false);
+        oozieSiteConf.addResource(oozieSiteSourceStream);
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        InputStream inputStream = classLoader.getResourceAsStream(ConfigurationService.DEFAULT_CONFIG_FILE);
+        XConfiguration configuration = new XConfiguration(inputStream);
+        String classes = configuration.get(Services.CONF_SERVICE_CLASSES);
+        // Disable sharelib service as it cannot find the sharelib jars
+        // as maven has target/classes in classpath and not the jar because test phase is before package phase
+        oozieSiteConf.set(Services.CONF_SERVICE_CLASSES, classes.replaceAll("org.apache.oozie.service.ShareLibService,",""));
         File target = new File(testCaseConfDir, "oozie-site.xml");
-        IOUtils.copyStream(new FileInputStream(source), new FileOutputStream(target));
+        oozieSiteConf.writeXml(new FileOutputStream(target));
 
         File hadoopConfDir = new File(testCaseConfDir, "hadoop-conf");
         hadoopConfDir.mkdir();
@@ -300,9 +346,13 @@ public abstract class XTestCase extends TestCase {
 
         if (mrCluster != null) {
             OutputStream os = new FileOutputStream(new File(hadoopConfDir, "core-site.xml"));
-            Configuration conf = mrCluster.createJobConf();
+            Configuration conf = createJobConfFromMRCluster();
             conf.writeXml(os);
             os.close();
+        }
+
+        if (System.getProperty("oozie.test.metastore.server", "true").equals("true")) {
+            setupHCatalogServer();
         }
     }
 
@@ -317,6 +367,19 @@ public abstract class XTestCase extends TestCase {
         super.tearDown();
         RUNNING_TESTCASES.decrementAndGet();
         LAST_TESTCASE_FINISHED.set(System.currentTimeMillis());
+        resetQueryExecutor();
+    }
+
+    private void resetQueryExecutor(){
+        BatchQueryExecutor.destroy();
+        WorkflowJobQueryExecutor.destroy();
+        WorkflowActionQueryExecutor.destroy();
+        CoordJobQueryExecutor.destroy();
+        CoordActionQueryExecutor.destroy();
+        BundleJobQueryExecutor.destroy();
+        BundleActionQueryExecutor.destroy();
+        SLARegistrationQueryExecutor.destroy();
+        SLASummaryQueryExecutor.destroy();
     }
 
     /**
@@ -387,6 +450,15 @@ public abstract class XTestCase extends TestCase {
      */
     protected static String getTestGroup() {
         return System.getProperty(TEST_GROUP_PROP, "testg");
+    }
+
+    /**
+     * Return the alternate test group.
+     *
+     * @return the test group.
+     */
+    protected static String getTestGroup2() {
+        return System.getProperty(TEST_GROUP_PROP, "testg2");
     }
 
     /**
@@ -477,6 +549,9 @@ public abstract class XTestCase extends TestCase {
      * @param value value to set.
      */
     protected void setSystemProperty(String name, String value) {
+        if (sysProps == null) {
+            sysProps = new HashMap<String, String>();
+        }
         if (!sysProps.containsKey(name)) {
             String currentValue = System.getProperty(name);
             sysProps.put(name, currentValue);
@@ -493,15 +568,17 @@ public abstract class XTestCase extends TestCase {
      * Reset changed system properties to their original values. <p/> Called from {@link #tearDown}.
      */
     private void resetSystemProperties() {
-        for (Map.Entry<String, String> entry : sysProps.entrySet()) {
-            if (entry.getValue() != null) {
-                System.setProperty(entry.getKey(), entry.getValue());
+        if (sysProps != null) {
+            for (Map.Entry<String, String> entry : sysProps.entrySet()) {
+                if (entry.getValue() != null) {
+                    System.setProperty(entry.getKey(), entry.getValue());
+                }
+                else {
+                    System.getProperties().remove(entry.getKey());
+                }
             }
-            else {
-                System.getProperties().remove(entry.getKey());
-            }
+            sysProps.clear();
         }
-        sysProps.clear();
     }
 
     /**
@@ -601,6 +678,10 @@ public abstract class XTestCase extends TestCase {
                                   getOozieUser() + "/localhost") + "@" + getRealm();
     }
 
+    protected MiniHCatServer getHCatalogServer() {
+        return hcatServer;
+    }
+
     //TODO Fix this
     /**
      * Clean up database schema
@@ -671,6 +752,20 @@ public abstract class XTestCase extends TestCase {
             entityManager.remove(w);
         }
 
+        q = entityManager.createQuery("select OBJECT(w) from SLARegistrationBean w");
+        List<SLARegistrationBean> slaRegBeans = q.getResultList();
+        int slaRegSize = slaRegBeans.size();
+        for (SLARegistrationBean w : slaRegBeans) {
+            entityManager.remove(w);
+        }
+
+        q = entityManager.createQuery("select OBJECT(w) from SLASummaryBean w");
+        List<SLASummaryBean> sdBeans = q.getResultList();
+        int ssSize = sdBeans.size();
+        for (SLASummaryBean w : sdBeans) {
+            entityManager.remove(w);
+        }
+
         store.commitTrx();
         store.closeTrx();
         log.info(wfjSize + " entries in WF_JOBS removed from DB!");
@@ -680,10 +775,14 @@ public abstract class XTestCase extends TestCase {
         log.info(bjSize + " entries in BUNDLE_JOBS removed from DB!");
         log.info(baSize + " entries in BUNDLE_ACTIONS removed from DB!");
         log.info(slaSize + " entries in SLA_EVENTS removed from DB!");
+        log.info(slaRegSize + " entries in SLA_REGISTRATION removed from DB!");
+        log.info(ssSize + " entries in SLA_SUMMARY removed from DB!");
+
     }
 
     private static MiniDFSCluster dfsCluster = null;
     private static MiniMRCluster mrCluster = null;
+    private static MiniHCatServer hcatServer = null;
 
     private void setUpEmbeddedHadoop(String testCaseDir) throws Exception {
         if (dfsCluster == null && mrCluster == null) {
@@ -712,16 +811,18 @@ public abstract class XTestCase extends TestCase {
             conf.set("mapred.tasktracker.map.tasks.maximum", "4");
             conf.set("mapred.tasktracker.reduce.tasks.maximum", "4");
 
-            String [] userGroups = new String[] { getTestGroup() };
+            String[] userGroups = new String[] { getTestGroup(), getTestGroup2() };
             UserGroupInformation.createUserForTesting(oozieUser, userGroups);
             UserGroupInformation.createUserForTesting(getTestUser(), userGroups);
             UserGroupInformation.createUserForTesting(getTestUser2(), userGroups);
             UserGroupInformation.createUserForTesting(getTestUser3(), new String[] { "users" } );
             conf.set("hadoop.tmp.dir", "target/test-data"+"/minicluster");
 
-            // Scheduler properties required for YARN to work
+            // Scheduler properties required for YARN CapacityScheduler to work
             conf.set("yarn.scheduler.capacity.root.queues", "default");
             conf.set("yarn.scheduler.capacity.root.default.capacity", "100");
+            // Required to prevent deadlocks with YARN CapacityScheduler
+            conf.set("yarn.scheduler.capacity.maximum-am-resource-percent", "0.5");
 
             try {
                 dfsCluster = new MiniDFSCluster(conf, dataNodes, true, null);
@@ -756,6 +857,14 @@ public abstract class XTestCase extends TestCase {
                 throw ex;
             }
             new MiniClusterShutdownMonitor().start();
+        }
+    }
+
+    private void setupHCatalogServer() throws Exception {
+        if (hcatServer == null) {
+            hcatServer = new MiniHCatServer(RUNMODE.SERVER, createJobConf());
+            hcatServer.start();
+            log.info("Metastore server started at " + hcatServer.getMetastoreURI());
         }
     }
 
@@ -807,6 +916,20 @@ public abstract class XTestCase extends TestCase {
         }
     }
 
+    @SuppressWarnings("deprecation")
+    private JobConf createJobConfFromMRCluster() {
+        JobConf jobConf = new JobConf();
+        JobConf jobConfMR = mrCluster.createJobConf();
+        for ( Entry<String, String> entry : jobConfMR) {
+            // MiniMRClientClusterFactory sets the job jar in Hadoop 2.0 causing tests to fail
+            // TODO call conf.unset after moving completely to Hadoop 2.x
+            if (!(entry.getKey().equals("mapreduce.job.jar") || entry.getKey().equals("mapred.jar"))) {
+                jobConf.set(entry.getKey(), entry.getValue());
+            }
+        }
+        return jobConf;
+    }
+
     /**
      * Returns a jobconf preconfigured to talk with the test cluster/minicluster.
      * @return a jobconf preconfigured to talk with the test cluster/minicluster.
@@ -814,7 +937,7 @@ public abstract class XTestCase extends TestCase {
     protected JobConf createJobConf() {
         JobConf jobConf;
         if (mrCluster != null) {
-            jobConf = mrCluster.createJobConf();
+            jobConf = createJobConfFromMRCluster();
         }
         else {
             jobConf = new JobConf();
@@ -857,5 +980,24 @@ public abstract class XTestCase extends TestCase {
             throw new RuntimeException(ex);
         }
     }
+
+    protected Services setupServicesForHCatalog() throws ServiceException {
+        Services services = new Services();
+        Configuration conf = services.getConf();
+        conf.set(Services.CONF_SERVICE_EXT_CLASSES,
+                JMSAccessorService.class.getName() + "," +
+                PartitionDependencyManagerService.class.getName() + "," +
+                HCatAccessorService.class.getName());
+        conf.set(HCatAccessorService.JMS_CONNECTIONS_PROPERTIES,
+                "default=java.naming.factory.initial#" + ActiveMQConnFactory + ";" +
+                "java.naming.provider.url#" + localActiveMQBroker +
+                "connectionFactoryNames#"+ "ConnectionFactory");
+        conf.set(URIHandlerService.URI_HANDLERS,
+                FSURIHandler.class.getName() + "," + HCatURIHandler.class.getName());
+        setSystemProperty("java.naming.factory.initial", "org.apache.activemq.jndi.ActiveMQInitialContextFactory");
+        setSystemProperty("java.naming.provider.url", "vm://localhost?broker.persistent=false");
+        return services;
+    }
+
 }
 

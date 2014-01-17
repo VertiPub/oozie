@@ -17,7 +17,6 @@
  */
 package org.apache.oozie.executor.jpa;
 
-import java.sql.Date;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,6 +26,7 @@ import javax.persistence.Query;
 
 import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.ErrorCode;
+import org.apache.oozie.StringBlob;
 import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.util.DateUtils;
@@ -40,6 +40,7 @@ public class CoordJobGetActionsSubsetJPAExecutor implements JPAExecutor<List<Coo
     private String coordJobId = null;
     private int start = 1;
     private int len = 50;
+    private boolean desc = false;
     private List<String> filterList;
 
     public CoordJobGetActionsSubsetJPAExecutor(String coordJobId) {
@@ -47,12 +48,13 @@ public class CoordJobGetActionsSubsetJPAExecutor implements JPAExecutor<List<Coo
         this.coordJobId = coordJobId;
     }
 
-    public CoordJobGetActionsSubsetJPAExecutor(String coordJobId, List<String> filterList, int start, int len) {
+    public CoordJobGetActionsSubsetJPAExecutor(String coordJobId, List<String> filterList, int start, int len, boolean desc) {
         this(coordJobId);
         ParamChecker.notNull(filterList, "filterList");
         this.filterList = filterList;
         this.start = start;
         this.len = len;
+        this.desc = desc;
     }
 
     @Override
@@ -78,12 +80,7 @@ public class CoordJobGetActionsSubsetJPAExecutor implements JPAExecutor<List<Coo
             } else {
                 Query q = em.createNamedQuery("GET_ALL_COLS_FOR_ACTIONS_FOR_COORD_JOB_ORDER_BY_NOMINAL_TIME");
                 q = setQueryParameters(q, em);
-                List<CoordinatorActionBean> caActions = q.getResultList();
-
-                for (CoordinatorActionBean a : caActions) {
-                    CoordinatorActionBean aa = getBeanForCoordAction(a);
-                    actionList.add(aa);
-                }
+                actionList = q.getResultList();
             }
         }
         catch (Exception e) {
@@ -104,6 +101,9 @@ public class CoordJobGetActionsSubsetJPAExecutor implements JPAExecutor<List<Coo
             sbTotal.insert(offset, statusClause);
             q = em.createQuery(sbTotal.toString());
         }
+        if (desc) {
+            q = em.createQuery(q.toString().concat(" desc"));
+        }
         q.setParameter("jobId", coordJobId);
         q.setFirstResult(start - 1);
         q.setMaxResults(len);
@@ -116,7 +116,7 @@ public class CoordJobGetActionsSubsetJPAExecutor implements JPAExecutor<List<Coo
         boolean isStatus = false;
         for (String statusVal : filterList) {
             if (!isStatus) {
-                sb.append(" and a.status IN (\'" + statusVal + "\'");
+                sb.append(" and a.statusStr IN (\'" + statusVal + "\'");
                 isStatus = true;
             }
             else {
@@ -125,32 +125,6 @@ public class CoordJobGetActionsSubsetJPAExecutor implements JPAExecutor<List<Coo
         }
         sb.append(") ");
         return sb;
-    }
-
-    private CoordinatorActionBean getBeanForCoordAction(CoordinatorActionBean a){
-        if (a != null) {
-            CoordinatorActionBean action = new CoordinatorActionBean();
-            action.setId(a.getId());
-            action.setActionNumber(a.getActionNumber());
-            action.setActionXml(a.getActionXml());
-            action.setConsoleUrl(a.getConsoleUrl());
-            action.setCreatedConf(a.getCreatedConf());
-            action.setExternalStatus(a.getExternalStatus());
-            action.setMissingDependencies(a.getMissingDependencies());
-            action.setRunConf(a.getRunConf());
-            action.setTimeOut(a.getTimeOut());
-            action.setTrackerUri(a.getTrackerUri());
-            action.setType(a.getType());
-            action.setCreatedTime(a.getCreatedTime());
-            action.setExternalId(a.getExternalId());
-            action.setJobId(a.getJobId());
-            action.setLastModifiedTime(a.getLastModifiedTime());
-            action.setNominalTime(a.getNominalTime());
-            action.setSlaXml(a.getSlaXml());
-            action.setStatus(a.getStatus());
-            return action;
-        }
-        return null;
     }
 
     private CoordinatorActionBean getBeanForRunningCoordAction(Object arr[]) {
@@ -195,10 +169,13 @@ public class CoordJobGetActionsSubsetJPAExecutor implements JPAExecutor<List<Coo
             bean.setLastModifiedTime(DateUtils.toDate((Timestamp) arr[12]));
         }
         if (arr[13] != null) {
-            bean.setMissingDependencies((String) arr[13]);
+            bean.setMissingDependenciesBlob((StringBlob) arr[13]);
         }
         if (arr[14] != null) {
-            bean.setTimeOut((Integer) arr[14]);
+            bean.setPushMissingDependenciesBlob((StringBlob) arr[14]);
+        }
+        if (arr[15] != null) {
+            bean.setTimeOut((Integer) arr[15]);
         }
         return bean;
 

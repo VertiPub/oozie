@@ -21,11 +21,12 @@ import org.apache.oozie.ErrorCode;
 import org.apache.oozie.FaultInjection;
 import org.apache.oozie.XException;
 import org.apache.oozie.service.CallableQueueService;
+import org.apache.oozie.service.EventHandlerService;
 import org.apache.oozie.service.InstrumentationService;
 import org.apache.oozie.service.MemoryLocksService;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.util.Instrumentation;
-import org.apache.oozie.util.MemoryLocks;
+import org.apache.oozie.lock.LockToken;
 import org.apache.oozie.util.XCallable;
 import org.apache.oozie.util.XLog;
 
@@ -68,7 +69,7 @@ public abstract class XCommand<T> implements XCallable<T> {
     private int priority;
     private String type;
     private long createdTime;
-    private MemoryLocks.LockToken lock;
+    private LockToken lock;
     private AtomicBoolean used = new AtomicBoolean(false);
     private boolean inInterrupt = false;
 
@@ -77,6 +78,7 @@ public abstract class XCommand<T> implements XCallable<T> {
     protected Instrumentation instrumentation;
 
     protected XLog.Info logInfo;
+    protected static EventHandlerService eventService;
 
     /**
      * Create a command.
@@ -93,6 +95,7 @@ public abstract class XCommand<T> implements XCallable<T> {
         createdTime = System.currentTimeMillis();
         logInfo = new XLog.Info();
         instrumentation = Services.get().get(InstrumentationService.class).get();
+        eventService = Services.get().get(EventHandlerService.class);
     }
 
     /**

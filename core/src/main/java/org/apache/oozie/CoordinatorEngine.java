@@ -24,10 +24,12 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringTokenizer;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.client.CoordinatorJob;
@@ -37,6 +39,7 @@ import org.apache.oozie.client.rest.RestConstants;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.coord.CoordActionInfoXCommand;
 import org.apache.oozie.util.CoordActionsInDateRange;
+import org.apache.oozie.command.coord.CoordActionsKillXCommand;
 import org.apache.oozie.command.coord.CoordChangeXCommand;
 import org.apache.oozie.command.coord.CoordJobXCommand;
 import org.apache.oozie.command.coord.CoordJobsXCommand;
@@ -47,10 +50,12 @@ import org.apache.oozie.command.coord.CoordSubmitXCommand;
 import org.apache.oozie.command.coord.CoordSuspendXCommand;
 import org.apache.oozie.service.DagXLogInfoService;
 import org.apache.oozie.service.Services;
-import org.apache.oozie.service.XLogService;
+import org.apache.oozie.service.XLogStreamingService;
 import org.apache.oozie.util.ParamChecker;
 import org.apache.oozie.util.XLog;
 import org.apache.oozie.util.XLogStreamer;
+
+import com.google.common.annotations.VisibleForTesting;
 
 public class CoordinatorEngine extends BaseEngine {
     private static XLog LOG = XLog.getLog(CoordinatorEngine.class);
@@ -71,12 +76,10 @@ public class CoordinatorEngine extends BaseEngine {
      * Create a Coordinator engine to perform operations on behave of a user.
      *
      * @param user user name.
-     * @param authToken the authentication token.
      */
-    public CoordinatorEngine(String user, String authToken) {
+    public CoordinatorEngine(String user) {
         this();
         this.user = ParamChecker.notEmpty(user, "user");
-        this.authToken = ParamChecker.notEmpty(authToken, "authToken");
     }
 
     /*
@@ -97,7 +100,7 @@ public class CoordinatorEngine extends BaseEngine {
      */
     private CoordinatorJobBean getCoordJobWithNoActionInfo(String jobId) throws BaseEngineException {
         try {
-			return new CoordJobXCommand(jobId).call();
+            return new CoordJobXCommand(jobId).call();
         }
         catch (CommandException ex) {
             throw new BaseEngineException(ex);
@@ -111,7 +114,7 @@ public class CoordinatorEngine extends BaseEngine {
      */
     public CoordinatorActionBean getCoordAction(String actionId) throws BaseEngineException {
         try {
-			return new CoordActionInfoXCommand(actionId).call();
+            return new CoordActionInfoXCommand(actionId).call();
         }
         catch (CommandException ex) {
             throw new BaseEngineException(ex);
@@ -126,7 +129,7 @@ public class CoordinatorEngine extends BaseEngine {
     @Override
     public CoordinatorJobBean getCoordJob(String jobId) throws BaseEngineException {
         try {
-			return new CoordJobXCommand(jobId).call();
+            return new CoordJobXCommand(jobId).call();
         }
         catch (CommandException ex) {
             throw new BaseEngineException(ex);
@@ -139,11 +142,12 @@ public class CoordinatorEngine extends BaseEngine {
      * @see org.apache.oozie.BaseEngine#getCoordJob(java.lang.String, java.lang.String, int, int)
      */
     @Override
-    public CoordinatorJobBean getCoordJob(String jobId, String filter, int start, int length) throws BaseEngineException {
+    public CoordinatorJobBean getCoordJob(String jobId, String filter, int start, int length, boolean desc)
+            throws BaseEngineException {
         List<String> filterList = parseStatusFilter(filter);
         try {
-			return new CoordJobXCommand(jobId, filterList, start, length)
-					.call();
+            return new CoordJobXCommand(jobId, filterList, start, length, desc)
+                    .call();
         }
         catch (CommandException ex) {
             throw new BaseEngineException(ex);
@@ -168,8 +172,17 @@ public class CoordinatorEngine extends BaseEngine {
     @Override
     public void kill(String jobId) throws CoordinatorEngineException {
         try {
-			new CoordKillXCommand(jobId).call();
+            new CoordKillXCommand(jobId).call();
             LOG.info("User " + user + " killed the Coordinator job " + jobId);
+        }
+        catch (CommandException e) {
+            throw new CoordinatorEngineException(e);
+        }
+    }
+
+    public CoordinatorActionInfo killActions(String jobId, String rangeType, String scope) throws CoordinatorEngineException {
+        try {
+            return new CoordActionsKillXCommand(jobId, rangeType, scope).call();
         }
         catch (CommandException e) {
             throw new CoordinatorEngineException(e);
@@ -209,8 +222,8 @@ public class CoordinatorEngine extends BaseEngine {
     public CoordinatorActionInfo reRun(String jobId, String rerunType, String scope, boolean refresh, boolean noCleanup)
             throws BaseEngineException {
         try {
-			return new CoordRerunXCommand(jobId, rerunType, scope, refresh,
-					noCleanup).call();
+            return new CoordRerunXCommand(jobId, rerunType, scope, refresh,
+                    noCleanup).call();
         }
         catch (CommandException ex) {
             throw new BaseEngineException(ex);
@@ -225,7 +238,7 @@ public class CoordinatorEngine extends BaseEngine {
     @Override
     public void resume(String jobId) throws CoordinatorEngineException {
         try {
-			new CoordResumeXCommand(jobId).call();
+            new CoordResumeXCommand(jobId).call();
         }
         catch (CommandException e) {
             throw new CoordinatorEngineException(e);
@@ -245,12 +258,12 @@ public class CoordinatorEngine extends BaseEngine {
      * java.io.Writer)
      */
     @Override
-    public void streamLog(String jobId, Writer writer) throws IOException, BaseEngineException {
+    public void streamLog(String jobId, Writer writer, Map<String, String[]> params) throws IOException, BaseEngineException {
         XLogStreamer.Filter filter = new XLogStreamer.Filter();
         filter.setParameter(DagXLogInfoService.JOB, jobId);
 
         CoordinatorJobBean job = getCoordJobWithNoActionInfo(jobId);
-        Services.get().get(XLogService.class).streamLog(filter, job.getCreatedTime(), new Date(), writer);
+        Services.get().get(XLogStreamingService.class).streamLog(filter, job.getCreatedTime(), new Date(), writer, params);
     }
 
     /**
@@ -260,18 +273,20 @@ public class CoordinatorEngine extends BaseEngine {
      * @param logRetrievalScope Value for the retrieval type
      * @param logRetrievalType Based on which filter criteria the log is retrieved
      * @param writer writer to stream the log to
+     * @param params additional parameters from the request
      * @throws IOException
      * @throws BaseEngineException
      * @throws CommandException
      */
-    public void streamLog(String jobId, String logRetrievalScope, String logRetrievalType, Writer writer)
-            throws IOException, BaseEngineException, CommandException {
+    public void streamLog(String jobId, String logRetrievalScope, String logRetrievalType, Writer writer,
+            Map<String, String[]> params) throws IOException, BaseEngineException, CommandException {
         XLogStreamer.Filter filter = new XLogStreamer.Filter();
         filter.setParameter(DagXLogInfoService.JOB, jobId);
         if (logRetrievalScope != null && logRetrievalType != null) {
             // if coordinator action logs are to be retrieved based on action id range
             if (logRetrievalType.equals(RestConstants.JOB_LOG_ACTION)) {
-                Set<String> actions = new HashSet<String>();
+                // Use set implementation that maintains order or elements to achieve reproducibility:
+                Set<String> actionSet = new LinkedHashSet<String>();
                 String[] list = logRetrievalScope.split(",");
                 for (String s : list) {
                     s = s.trim();
@@ -299,7 +314,7 @@ public class CoordinatorEngine extends BaseEngine {
                             throw new CommandException(ErrorCode.E0302, "format is wrong for action's range '" + s + "'");
                         }
                         for (int i = start; i <= end; i++) {
-                            actions.add(jobId + "@" + i);
+                            actionSet.add(jobId + "@" + i);
                         }
                     }
                     else {
@@ -310,11 +325,11 @@ public class CoordinatorEngine extends BaseEngine {
                             throw new CommandException(ErrorCode.E0302, "format is wrong for action id'" + s
                                     + "'. Integer only.");
                         }
-                        actions.add(jobId + "@" + s);
+                        actionSet.add(jobId + "@" + s);
                     }
                 }
 
-                Iterator<String> actionsIterator = actions.iterator();
+                Iterator<String> actionsIterator = actionSet.iterator();
                 StringBuilder orSeparatedActions = new StringBuilder("");
                 boolean orRequired = false;
                 while (actionsIterator.hasNext()) {
@@ -324,7 +339,7 @@ public class CoordinatorEngine extends BaseEngine {
                     orSeparatedActions.append(actionsIterator.next().toString());
                     orRequired = true;
                 }
-                if (actions.size() > 1 && orRequired) {
+                if (actionSet.size() > 1 && orRequired) {
                     orSeparatedActions.insert(0, "(");
                     orSeparatedActions.append(")");
                 }
@@ -357,7 +372,7 @@ public class CoordinatorEngine extends BaseEngine {
             }
         }
         CoordinatorJobBean job = getCoordJobWithNoActionInfo(jobId);
-        Services.get().get(XLogService.class).streamLog(filter, job.getCreatedTime(), new Date(), writer);
+        Services.get().get(XLogStreamingService.class).streamLog(filter, job.getCreatedTime(), new Date(), writer, params);
     }
 
     /*
@@ -370,9 +385,8 @@ public class CoordinatorEngine extends BaseEngine {
     @Override
     public String submitJob(Configuration conf, boolean startJob) throws CoordinatorEngineException {
         try {
-			CoordSubmitXCommand submit = new CoordSubmitXCommand(conf,
-					getAuthToken());
-			return submit.call();
+            CoordSubmitXCommand submit = new CoordSubmitXCommand(conf);
+            return submit.call();
         }
         catch (CommandException ex) {
             throw new CoordinatorEngineException(ex);
@@ -388,9 +402,8 @@ public class CoordinatorEngine extends BaseEngine {
     @Override
     public String dryRunSubmit(Configuration conf) throws CoordinatorEngineException {
         try {
-			CoordSubmitXCommand submit = new CoordSubmitXCommand(true, conf,
-					getAuthToken());
-			return submit.call();
+            CoordSubmitXCommand submit = new CoordSubmitXCommand(true, conf);
+            return submit.call();
         }
         catch (CommandException ex) {
             throw new CoordinatorEngineException(ex);
@@ -405,7 +418,7 @@ public class CoordinatorEngine extends BaseEngine {
     @Override
     public void suspend(String jobId) throws CoordinatorEngineException {
         try {
-			new CoordSuspendXCommand(jobId).call();
+            new CoordSuspendXCommand(jobId).call();
         }
         catch (CommandException e) {
             throw new CoordinatorEngineException(e);
@@ -456,7 +469,7 @@ public class CoordinatorEngine extends BaseEngine {
         Map<String, List<String>> filterList = parseFilter(filter);
 
         try {
-			return new CoordJobsXCommand(filterList, start, len).call();
+            return new CoordJobsXCommand(filterList, start, len).call();
         }
         catch (CommandException ex) {
             throw new CoordinatorEngineException(ex);
@@ -489,7 +502,7 @@ public class CoordinatorEngine extends BaseEngine {
                             }
                             // Check for incorrect status value
                             throw new CoordinatorEngineException(ErrorCode.E0421, filter, XLog.format(
-                                    "invalid status value [{0}]." + " Valid status values are: [{1}]", statusValue, validStatusList));
+                                "invalid status value [{0}]." + " Valid status values are: [{1}]", statusValue, validStatusList));
                         }
                         filterList.add(statusValue);
                     } else {
@@ -511,7 +524,8 @@ public class CoordinatorEngine extends BaseEngine {
      * @return Map<String, List<String>>
      * @throws CoordinatorEngineException
      */
-    private Map<String, List<String>> parseFilter(String filter) throws CoordinatorEngineException {
+    @VisibleForTesting
+    Map<String, List<String>> parseFilter(String filter) throws CoordinatorEngineException {
         Map<String, List<String>> map = new HashMap<String, List<String>>();
         boolean isTimeUnitSpecified = false;
         String timeUnit = "MINUTE";

@@ -19,16 +19,19 @@ package org.apache.oozie;
 
 import java.io.IOException;
 import java.io.Writer;
+import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.client.CoordinatorJob;
 import org.apache.oozie.client.WorkflowJob;
+import org.apache.oozie.executor.jpa.JPAExecutorException;
+import org.apache.oozie.service.JMSTopicService;
+import org.apache.oozie.service.Services;
 
 public abstract class BaseEngine {
     public static final String USE_XCOMMAND = "oozie.useXCommand";
 
     protected String user;
-    protected String authToken;
 
     /**
      * Return the user name.
@@ -37,15 +40,6 @@ public abstract class BaseEngine {
      */
     public String getUser() {
         return user;
-    }
-
-    /**
-     * Return the authentication token.
-     *
-     * @return the authentication token.
-     */
-    protected String getAuthToken() {
-        return authToken;
     }
 
     /**
@@ -146,10 +140,12 @@ public abstract class BaseEngine {
      * @param filter the status filter
      * @param start starting from this index in the list of actions belonging to the job
      * @param length number of actions to be returned
+     * @param order true if actions are sorted in a descending order of nominal time, false if asc order
      * @return the coord job info.
      * @throws BaseEngineException thrown if the job info could not be obtained.
      */
-    public abstract CoordinatorJob getCoordJob(String jobId, String filter, int start, int length) throws BaseEngineException;
+    public abstract CoordinatorJob getCoordJob(String jobId, String filter, int start, int length, boolean desc)
+            throws BaseEngineException;
 
     /**
      * Return the a job definition.
@@ -165,11 +161,13 @@ public abstract class BaseEngine {
      *
      * @param jobId job Id.
      * @param writer writer to stream the log to.
+     * @param params additional parameters from the request
      * @throws IOException thrown if the log cannot be streamed.
      * @throws BaseEngineException thrown if there is error in getting the Workflow/Coordinator Job Information for
      *         jobId.
      */
-    public abstract void streamLog(String jobId, Writer writer) throws IOException, BaseEngineException;
+    public abstract void streamLog(String jobId, Writer writer, Map<String, String[]> params)
+            throws IOException, BaseEngineException;
 
     /**
      * Return the workflow Job ID for an external ID.
@@ -193,5 +191,30 @@ public abstract class BaseEngine {
      * @throws BaseEngineException thrown if there was a problem doing the dryrun
      */
     public abstract String dryRunSubmit(Configuration conf) throws BaseEngineException;
+
+
+    /**
+     * Return the jms topic name for the job.
+     *
+     * @param jobId job Id.
+     * @return String the topic name
+     * @throws DagEngineException thrown if the jms info could not be obtained.
+     */
+    public String getJMSTopicName(String jobId) throws DagEngineException {
+        JMSTopicService jmsTopicService = Services.get().get(JMSTopicService.class);
+        if (jmsTopicService != null) {
+            try {
+                return jmsTopicService.getTopic(jobId);
+            }
+            catch (JPAExecutorException e) {
+               throw new DagEngineException(ErrorCode.E1602, e);
+            }
+        }
+        else {
+            throw new DagEngineException(ErrorCode.E1602,
+                    "JMSTopicService is not initialized. JMS notification"
+                            + "may not be enabled");
+        }
+    }
 
 }

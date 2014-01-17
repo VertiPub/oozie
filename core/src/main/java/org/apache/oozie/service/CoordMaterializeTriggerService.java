@@ -25,8 +25,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.CoordinatorJobBean;
 import org.apache.oozie.command.coord.CoordMaterializeTransitionXCommand;
 import org.apache.oozie.executor.jpa.CoordActionsActiveCountJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordJobGetRunningActionsCountJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordJobUpdateJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor;
 import org.apache.oozie.executor.jpa.CoordJobsToBeMaterializedJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.util.XCallable;
@@ -124,27 +123,33 @@ public class CoordMaterializeTriggerService implements Service {
                 LOG.info("CoordMaterializeTriggerService - Curr Date= " + currDate + ", Num jobs to materialize = "
                         + materializeJobs.size());
                 for (CoordinatorJobBean coordJob : materializeJobs) {
-                    Services.get().get(InstrumentationService.class).get()
-                            .incr(INSTRUMENTATION_GROUP, INSTR_MAT_JOBS_COUNTER, 1);
-                    int numWaitingActions = jpaService
-                            .execute(new CoordActionsActiveCountJPAExecutor(coordJob.getId()));
-                    LOG.info("Job :" + coordJob.getId() + "  numWaitingActions : " + numWaitingActions
-                            + " MatThrottle : " + coordJob.getMatThrottling());
-                    // update lastModifiedTime so next time others might have higher chance to get pick up
-                    coordJob.setLastModifiedTime(new Date());
-                    jpaService.execute(new CoordJobUpdateJPAExecutor(coordJob));
-                    if (numWaitingActions >= coordJob.getMatThrottling()) {
-                        LOG.info("info for JobID [" + coordJob.getId() + " already waiting "
-                                + numWaitingActions + " actions. MatThrottle is : " + coordJob.getMatThrottling());
-                        continue;
+                    if (Services.get().get(JobsConcurrencyService.class).isJobIdForThisServer(coordJob.getId())) {
+                        Services.get().get(InstrumentationService.class).get()
+                                .incr(INSTRUMENTATION_GROUP, INSTR_MAT_JOBS_COUNTER, 1);
+                        int numWaitingActions = jpaService
+                                .execute(new CoordActionsActiveCountJPAExecutor(coordJob.getId()));
+                        LOG.info("Job :" + coordJob.getId() + "  numWaitingActions : " + numWaitingActions
+                                + " MatThrottle : " + coordJob.getMatThrottling());
+                        // update lastModifiedTime so next time others might have higher chance to get pick up
+                        coordJob.setLastModifiedTime(new Date());
+                        CoordJobQueryExecutor.getInstance().executeUpdate(
+                                CoordJobQueryExecutor.CoordJobQuery.UPDATE_COORD_JOB_LAST_MODIFIED_TIME,
+                                coordJob);
+                        if (numWaitingActions >= coordJob.getMatThrottling()) {
+                            LOG.info("info for JobID [" + coordJob.getId() + " already waiting "
+                                    + numWaitingActions + " actions. MatThrottle is : " + coordJob.getMatThrottling());
+                            continue;
+                        }
+                        queueCallable(new CoordMaterializeTransitionXCommand(coordJob.getId(), materializationWindow));
                     }
-                    queueCallable(new CoordMaterializeTransitionXCommand(coordJob.getId(), materializationWindow));
-
                 }
 
             }
             catch (JPAExecutorException jex) {
                 LOG.warn("JPAExecutorException while attempting to materialize coordinator jobs", jex);
+            }
+            catch (Exception ex) {
+                LOG.error("Exception while attempting to materialize coordinator jobs, {0}", ex.getMessage(), ex);
             }
         }
 

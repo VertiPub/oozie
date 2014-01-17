@@ -21,25 +21,34 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.sql.Timestamp;
+import java.text.MessageFormat;
 import java.util.Date;
+import java.util.List;
 
 import javax.persistence.Basic;
 import javax.persistence.Column;
 import javax.persistence.ColumnResult;
 import javax.persistence.Entity;
+import javax.persistence.Id;
 import javax.persistence.Lob;
 import javax.persistence.NamedNativeQueries;
 import javax.persistence.NamedNativeQuery;
 import javax.persistence.NamedQueries;
 import javax.persistence.NamedQuery;
 import javax.persistence.SqlResultSetMapping;
+import javax.persistence.Table;
 
 import org.apache.hadoop.io.Writable;
 import org.apache.oozie.client.CoordinatorAction;
-import org.apache.oozie.client.rest.JsonCoordinatorAction;
+import org.apache.oozie.client.rest.JsonBean;
+import org.apache.oozie.client.rest.JsonTags;
+import org.apache.oozie.client.rest.JsonUtils;
 import org.apache.oozie.util.DateUtils;
 import org.apache.oozie.util.WritableUtils;
 import org.apache.openjpa.persistence.jdbc.Index;
+import org.apache.openjpa.persistence.jdbc.Strategy;
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
 
 @SqlResultSetMapping(
         name = "CoordActionJobIdLmt",
@@ -49,92 +58,104 @@ import org.apache.openjpa.persistence.jdbc.Index;
 @Entity
 @NamedQueries({
 
-        @NamedQuery(name = "UPDATE_COORD_ACTION", query = "update CoordinatorActionBean w set w.actionNumber = :actionNumber, w.actionXml = :actionXml, w.consoleUrl = :consoleUrl, w.createdConf = :createdConf, w.errorCode = :errorCode, w.errorMessage = :errorMessage, w.externalStatus = :externalStatus, w.missingDependencies = :missingDependencies, w.runConf = :runConf, w.timeOut = :timeOut, w.trackerUri = :trackerUri, w.type = :type, w.createdTimestamp = :createdTime, w.externalId = :externalId, w.jobId = :jobId, w.lastModifiedTimestamp = :lastModifiedTime, w.nominalTimestamp = :nominalTime, w.slaXml = :slaXml, w.status = :status where w.id = :id"),
+        @NamedQuery(name = "UPDATE_COORD_ACTION", query = "update CoordinatorActionBean w set w.actionNumber = :actionNumber, w.actionXml = :actionXml, w.consoleUrl = :consoleUrl, w.createdConf = :createdConf, w.errorCode = :errorCode, w.errorMessage = :errorMessage, w.externalStatus = :externalStatus, w.missingDependencies = :missingDependencies, w.runConf = :runConf, w.timeOut = :timeOut, w.trackerUri = :trackerUri, w.type = :type, w.createdTimestamp = :createdTime, w.externalId = :externalId, w.jobId = :jobId, w.lastModifiedTimestamp = :lastModifiedTime, w.nominalTimestamp = :nominalTime, w.slaXml = :slaXml, w.statusStr = :status where w.id = :id"),
 
-        @NamedQuery(name = "UPDATE_COORD_ACTION_MIN", query = "update CoordinatorActionBean w set w.actionXml = :actionXml, w.missingDependencies = :missingDependencies, w.lastModifiedTimestamp = :lastModifiedTime, w.status = :status where w.id = :id"),
+        @NamedQuery(name = "UPDATE_COORD_ACTION_MIN", query = "update CoordinatorActionBean w set w.actionXml = :actionXml, w.missingDependencies = :missingDependencies, w.lastModifiedTimestamp = :lastModifiedTime, w.statusStr = :status where w.id = :id"),
         // Query to update the action status, pending status and last modified time stamp of a Coordinator action
-        @NamedQuery(name = "UPDATE_COORD_ACTION_STATUS_PENDING_TIME", query = "update CoordinatorActionBean w set w.status =:status, w.pending =:pending, w.lastModifiedTimestamp = :lastModifiedTime where w.id = :id"),
+        @NamedQuery(name = "UPDATE_COORD_ACTION_STATUS_PENDING_TIME", query = "update CoordinatorActionBean w set w.statusStr =:status, w.pending =:pending, w.lastModifiedTimestamp = :lastModifiedTime where w.id = :id"),
         // Update query for InputCheck
-        @NamedQuery(name = "UPDATE_COORD_ACTION_FOR_INPUTCHECK", query = "update CoordinatorActionBean w set w.status = :status, w.lastModifiedTimestamp = :lastModifiedTime, w.actionXml = :actionXml, w.missingDependencies = :missingDependencies where w.id = :id"),
+        @NamedQuery(name = "UPDATE_COORD_ACTION_FOR_INPUTCHECK", query = "update CoordinatorActionBean w set w.statusStr = :status, w.lastModifiedTimestamp = :lastModifiedTime, w.actionXml = :actionXml, w.missingDependencies = :missingDependencies where w.id = :id"),
+        // Update query for Push-based missing dependency check
+        @NamedQuery(name = "UPDATE_COORD_ACTION_FOR_PUSH_INPUTCHECK", query = "update CoordinatorActionBean w set w.statusStr = :status, w.lastModifiedTimestamp = :lastModifiedTime,  w.actionXml = :actionXml, w.pushMissingDependencies = :pushMissingDependencies where w.id = :id"),
+        // Update query for Push-based missing dependency check
+        @NamedQuery(name = "UPDATE_COORD_ACTION_DEPENDENCIES", query = "update CoordinatorActionBean w set w.missingDependencies = :missingDependencies, w.pushMissingDependencies = :pushMissingDependencies where w.id = :id"),
         // Update query for Start
-        @NamedQuery(name = "UPDATE_COORD_ACTION_FOR_START", query = "update CoordinatorActionBean w set w.status =:status, w.lastModifiedTimestamp = :lastModifiedTime, w.runConf = :runConf, w.externalId = :externalId, w.pending = :pending, w.errorCode = :errorCode, w.errorMessage = :errorMessage  where w.id = :id"),
+        @NamedQuery(name = "UPDATE_COORD_ACTION_FOR_START", query = "update CoordinatorActionBean w set w.statusStr =:status, w.lastModifiedTimestamp = :lastModifiedTime, w.runConf = :runConf, w.externalId = :externalId, w.pending = :pending, w.errorCode = :errorCode, w.errorMessage = :errorMessage  where w.id = :id"),
 
         @NamedQuery(name = "UPDATE_COORD_ACTION_FOR_MODIFIED_DATE", query = "update CoordinatorActionBean w set w.lastModifiedTimestamp = :lastModifiedTime where w.id = :id"),
 
-        @NamedQuery(name = "DELETE_COMPLETED_ACTIONS_FOR_COORDINATOR", query = "delete from CoordinatorActionBean a where a.jobId = :jobId and (a.status = 'SUCCEEDED' OR a.status = 'FAILED' OR a.status= 'KILLED')"),
+        @NamedQuery(name = "UPDATE_COORD_ACTION_RERUN", query = "update CoordinatorActionBean w set w.actionXml =:actionXml, w.statusStr = :status, w.externalId = :externalId, w.externalStatus = :externalStatus, w.rerunTimestamp = :rerunTime, w.lastModifiedTimestamp = :lastModifiedTime, w.createdTimestamp = :createdTime where w.id = :id"),
 
-        @NamedQuery(name = "DELETE_UNSCHEDULED_ACTION", query = "delete from CoordinatorActionBean a where a.id = :id and (a.status = 'WAITING' OR a.status = 'READY')"),
+        @NamedQuery(name = "DELETE_COMPLETED_ACTIONS_FOR_COORDINATOR", query = "delete from CoordinatorActionBean a where a.jobId = :jobId and (a.statusStr = 'SUCCEEDED' OR a.statusStr = 'FAILED' OR a.statusStr= 'KILLED')"),
+
+        @NamedQuery(name = "DELETE_ACTIONS_FOR_COORDINATOR", query = "delete from CoordinatorActionBean a where a.jobId = :jobId"),
+
+        @NamedQuery(name = "DELETE_UNSCHEDULED_ACTION", query = "delete from CoordinatorActionBean a where a.id = :id and (a.statusStr = 'WAITING' OR a.statusStr = 'READY')"),
 
         // Query used by XTestcase to setup tables
         @NamedQuery(name = "GET_COORD_ACTIONS", query = "select OBJECT(w) from CoordinatorActionBean w"),
         // Select query used only by test cases
         @NamedQuery(name = "GET_COORD_ACTION", query = "select OBJECT(a) from CoordinatorActionBean a where a.id = :id"),
 
+        // Select query used by SLAService on restart
+        @NamedQuery(name = "GET_COORD_ACTION_FOR_SLA", query = "select a.id, a.jobId, a.statusStr, a.externalId, a.lastModifiedTimestamp from CoordinatorActionBean a where a.id = :id"),
         // Select query used by ActionInfo command
-        @NamedQuery(name = "GET_COORD_ACTION_FOR_INFO", query = "select a.id, a.jobId, a.actionNumber, a.consoleUrl, a.errorCode, a.errorMessage, a.externalId, a.externalStatus, a.trackerUri, a.createdTimestamp, a.nominalTimestamp, a.status, a.lastModifiedTimestamp, a.missingDependencies from CoordinatorActionBean a where a.id = :id"),
+        @NamedQuery(name = "GET_COORD_ACTION_FOR_INFO", query = "select a.id, a.jobId, a.actionNumber, a.consoleUrl, a.errorCode, a.errorMessage, a.externalId, a.externalStatus, a.trackerUri, a.createdTimestamp, a.nominalTimestamp, a.statusStr, a.lastModifiedTimestamp, a.missingDependencies, a.pushMissingDependencies from CoordinatorActionBean a where a.id = :id"),
         // Select Query used by Timeout command
-        @NamedQuery(name = "GET_COORD_ACTION_FOR_TIMEOUT", query = "select a.id, a.jobId, a.status, a.runConf, a.pending from CoordinatorActionBean a where a.id = :id"),
+        @NamedQuery(name = "GET_COORD_ACTION_FOR_TIMEOUT", query = "select a.id, a.jobId, a.statusStr, a.runConf, a.pending, a.nominalTimestamp, a.createdTimestamp from CoordinatorActionBean a where a.id = :id"),
         // Select query used by InputCheck command
-        @NamedQuery(name = "GET_COORD_ACTION_FOR_INPUTCHECK", query = "select a.id, a.jobId, a.status, a.runConf, a.nominalTimestamp, a.createdTimestamp, a.actionXml, a.missingDependencies, a.timeOut from CoordinatorActionBean a where a.id = :id"),
+        @NamedQuery(name = "GET_COORD_ACTION_FOR_INPUTCHECK", query = "select a.id, a.jobId, a.statusStr, a.runConf, a.nominalTimestamp, a.createdTimestamp, a.actionXml, a.missingDependencies, a.pushMissingDependencies, a.timeOut from CoordinatorActionBean a where a.id = :id"),
         // Select query used by CoordActionUpdate command
-        @NamedQuery(name = "GET_COORD_ACTION_FOR_EXTERNALID", query = "select a.id, a.jobId, a.status, a.pending, a.externalId, a.lastModifiedTimestamp, a.slaXml from CoordinatorActionBean a where a.externalId = :externalId"),
+        @NamedQuery(name = "GET_COORD_ACTION_FOR_EXTERNALID", query = "select a.id, a.jobId, a.statusStr, a.pending, a.externalId, a.lastModifiedTimestamp, a.slaXml, a.nominalTimestamp, a.createdTimestamp from CoordinatorActionBean a where a.externalId = :externalId"),
         // Select query used by Check command
-        @NamedQuery(name = "GET_COORD_ACTION_FOR_CHECK", query = "select a.id, a.jobId, a.status, a.pending, a.externalId, a.lastModifiedTimestamp, a.slaXml from CoordinatorActionBean a where a.id = :id"),
+        @NamedQuery(name = "GET_COORD_ACTION_FOR_CHECK", query = "select a.id, a.jobId, a.statusStr, a.pending, a.externalId, a.lastModifiedTimestamp, a.slaXml, a.nominalTimestamp, a.createdTimestamp from CoordinatorActionBean a where a.id = :id"),
         // Select query used by Start command
-        @NamedQuery(name = "GET_COORD_ACTION_FOR_START", query = "select a.id, a.jobId, a.status, a.pending, a.createdConf, a.slaXml, a.actionXml, a.externalId, a.errorMessage, a.errorCode from CoordinatorActionBean a where a.id = :id"),
+        @NamedQuery(name = "GET_COORD_ACTION_FOR_START", query = "select a.id, a.jobId, a.statusStr, a.pending, a.createdConf, a.slaXml, a.actionXml, a.externalId, a.errorMessage, a.errorCode, a.nominalTimestamp, a.createdTimestamp from CoordinatorActionBean a where a.id = :id"),
 
-        @NamedQuery(name = "GET_COORD_ACTIONS_FOR_JOB_FIFO", query = "select a.id, a.jobId, a.status, a.pending from CoordinatorActionBean a where a.jobId = :jobId AND a.status = 'READY' order by a.nominalTimestamp"),
+        @NamedQuery(name = "GET_COORD_ACTIONS_FOR_JOB_FIFO", query = "select a.id, a.jobId, a.statusStr, a.pending, a.nominalTimestamp, a.createdTimestamp from CoordinatorActionBean a where a.jobId = :jobId AND a.statusStr = 'READY' order by a.nominalTimestamp"),
 
-        @NamedQuery(name = "GET_COORD_ACTIONS_FOR_JOB_LIFO", query = "select a.id, a.jobId, a.status, a.pending from CoordinatorActionBean a where a.jobId = :jobId AND a.status = 'READY' order by a.nominalTimestamp desc"),
+        @NamedQuery(name = "GET_COORD_ACTIONS_FOR_JOB_LIFO", query = "select a.id, a.jobId, a.statusStr, a.pending, a.nominalTimestamp, a.createdTimestamp from CoordinatorActionBean a where a.jobId = :jobId AND a.statusStr = 'READY' order by a.nominalTimestamp desc"),
 
-        @NamedQuery(name = "GET_COORD_RUNNING_ACTIONS_COUNT", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId AND (a.status = 'RUNNING' OR a.status='SUBMITTED')"),
+        @NamedQuery(name = "GET_COORD_RUNNING_ACTIONS_COUNT", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId AND (a.statusStr = 'RUNNING' OR a.statusStr='SUBMITTED')"),
 
         @NamedQuery(name = "GET_COORD_ACTIONS_COUNT_BY_JOBID", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId"),
 
-        @NamedQuery(name = "GET_COORD_ACTIVE_ACTIONS_COUNT_BY_JOBID", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId AND a.status = 'WAITING'"),
+        @NamedQuery(name = "GET_COORD_ACTIVE_ACTIONS_COUNT_BY_JOBID", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId AND a.statusStr = 'WAITING'"),
 
-        @NamedQuery(name = "GET_COORD_ACTIONS_PENDING_FALSE_COUNT", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId AND a.pending = 0 AND (a.status = 'SUSPENDED' OR a.status = 'TIMEDOUT' OR a.status = 'SUCCEEDED' OR a.status = 'KILLED' OR a.status = 'FAILED')"),
+        @NamedQuery(name = "GET_COORD_ACTIONS_PENDING_FALSE_COUNT", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId AND a.pending = 0 AND (a.statusStr = 'SUSPENDED' OR a.statusStr = 'TIMEDOUT' OR a.statusStr = 'SUCCEEDED' OR a.statusStr = 'KILLED' OR a.statusStr = 'FAILED')"),
 
-        @NamedQuery(name = "GET_COORD_ACTIONS_PENDING_FALSE_STATUS_COUNT", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId AND a.pending = 0 AND a.status = :status"),
+        @NamedQuery(name = "GET_COORD_ACTIONS_PENDING_FALSE_STATUS_COUNT", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId AND a.pending = 0 AND a.statusStr = :status"),
 
         @NamedQuery(name = "GET_ACTIONS_FOR_COORD_JOB", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId"),
         // Query to retrieve Coordinator actions sorted by nominal time
-        @NamedQuery(name = "GET_ACTIONS_FOR_COORD_JOB_ORDER_BY_NOMINAL_TIME", query = "select a.id, a.actionNumber, a.consoleUrl, a.errorCode, a.errorMessage, a.externalId, a.externalStatus, a.jobId, a.trackerUri, a.createdTimestamp, a.nominalTimestamp, a.status, a.lastModifiedTimestamp, a.missingDependencies, a.timeOut from CoordinatorActionBean a where a.jobId = :jobId order by a.nominalTimestamp"),
+        @NamedQuery(name = "GET_ACTIONS_FOR_COORD_JOB_ORDER_BY_NOMINAL_TIME", query = "select a.id, a.actionNumber, a.consoleUrl, a.errorCode, a.errorMessage, a.externalId, a.externalStatus, a.jobId, a.trackerUri, a.createdTimestamp, a.nominalTimestamp, a.statusStr, a.lastModifiedTimestamp, a.missingDependencies, a.pushMissingDependencies, a.timeOut from CoordinatorActionBean a where a.jobId = :jobId order by a.nominalTimestamp"),
         // Query to maintain backward compatibility for coord job info command
         @NamedQuery(name = "GET_ALL_COLS_FOR_ACTIONS_FOR_COORD_JOB_ORDER_BY_NOMINAL_TIME", query = "select OBJECT(a) from CoordinatorActionBean a where a.jobId = :jobId order by a.nominalTimestamp"),
         // Query to retrieve action id, action status, pending status and external Id of not completed Coordinator actions
-        @NamedQuery(name = "GET_COORD_ACTIONS_NOT_COMPLETED", query = "select a.id, a.status, a.pending, a.externalId from CoordinatorActionBean a where a.jobId = :jobId AND a.status <> 'FAILED' AND a.status <> 'TIMEDOUT' AND a.status <> 'SUCCEEDED' AND a.status <> 'KILLED'"),
+        @NamedQuery(name = "GET_COORD_ACTIONS_NOT_COMPLETED", query = "select a.id, a.statusStr, a.pending, a.externalId, a.pushMissingDependencies, a.nominalTimestamp, a.createdTimestamp, a.jobId from CoordinatorActionBean a where a.jobId = :jobId AND a.statusStr <> 'FAILED' AND a.statusStr <> 'TIMEDOUT' AND a.statusStr <> 'SUCCEEDED' AND a.statusStr <> 'KILLED'"),
 
         // Query to retrieve action id, action status, pending status and external Id of running Coordinator actions
-        @NamedQuery(name = "GET_COORD_ACTIONS_RUNNING", query = "select a.id, a.status, a.pending, a.externalId from CoordinatorActionBean a where a.jobId = :jobId and a.status = 'RUNNING'"),
+        @NamedQuery(name = "GET_COORD_ACTIONS_RUNNING", query = "select a.id, a.statusStr, a.pending, a.externalId, a.nominalTimestamp, a.createdTimestamp from CoordinatorActionBean a where a.jobId = :jobId and a.statusStr = 'RUNNING'"),
 
         // Query to retrieve action id, action status, pending status and external Id of suspended Coordinator actions
-        @NamedQuery(name = "GET_COORD_ACTIONS_SUSPENDED", query = "select a.id, a.status, a.pending, a.externalId from CoordinatorActionBean a where a.jobId = :jobId and a.status = 'SUSPENDED'"),
+        @NamedQuery(name = "GET_COORD_ACTIONS_SUSPENDED", query = "select a.id, a.statusStr, a.pending, a.externalId, a.nominalTimestamp, a.createdTimestamp from CoordinatorActionBean a where a.jobId = :jobId and a.statusStr = 'SUSPENDED'"),
 
         // Query to retrieve count of Coordinator actions which are pending
         @NamedQuery(name = "GET_COORD_ACTIONS_PENDING_COUNT", query = "select count(a) from CoordinatorActionBean a where a.jobId = :jobId AND a.pending > 0"),
 
         // Query to retrieve status of Coordinator actions
-        @NamedQuery(name = "GET_COORD_ACTIONS_STATUS", query = "select a.status from CoordinatorActionBean a where a.jobId = :jobId"),
+        @NamedQuery(name = "GET_COORD_ACTIONS_STATUS", query = "select a.statusStr from CoordinatorActionBean a where a.jobId = :jobId"),
 
         @NamedQuery(name = "GET_COORD_ACTION_FOR_COORD_JOB_BY_ACTION_NUMBER", query = "select a.id from CoordinatorActionBean a where a.jobId = :jobId AND a.actionNumber = :actionNumber"),
 
         @NamedQuery(name = "GET_COORD_ACTIONS_BY_LAST_MODIFIED_TIME", query = "select a.jobId from CoordinatorActionBean a where a.lastModifiedTimestamp >= :lastModifiedTime"),
 
         //Used by coordinator store only
-        @NamedQuery(name = "GET_RUNNING_ACTIONS_FOR_COORD_JOB", query = "select OBJECT(a) from CoordinatorActionBean a where a.jobId = :jobId AND a.status = 'RUNNING'"),
+        @NamedQuery(name = "GET_RUNNING_ACTIONS_FOR_COORD_JOB", query = "select OBJECT(a) from CoordinatorActionBean a where a.jobId = :jobId AND a.statusStr = 'RUNNING'"),
 
-        @NamedQuery(name = "GET_RUNNING_ACTIONS_OLDER_THAN", query = "select a.id from CoordinatorActionBean a where a.status = 'RUNNING' AND a.lastModifiedTimestamp <= :lastModifiedTime"),
+        @NamedQuery(name = "GET_RUNNING_ACTIONS_OLDER_THAN", query = "select a.id from CoordinatorActionBean a where a.statusStr = 'RUNNING' AND a.lastModifiedTimestamp <= :lastModifiedTime"),
 
-        @NamedQuery(name = "GET_COORD_ACTIONS_WAITING_SUBMITTED_OLDER_THAN", query = "select a.id, a.jobId, a.status, a.externalId from CoordinatorActionBean a where (a.status = 'WAITING' OR a.status = 'SUBMITTED') AND a.lastModifiedTimestamp <= :lastModifiedTime"),
+        @NamedQuery(name = "GET_COORD_ACTIONS_WAITING_SUBMITTED_OLDER_THAN", query = "select a.id, a.jobId, a.statusStr, a.externalId, a.pushMissingDependencies from CoordinatorActionBean a where (a.statusStr = 'WAITING' OR a.statusStr = 'SUBMITTED') AND a.lastModifiedTimestamp <= :lastModifiedTime"),
 
-        @NamedQuery(name = "GET_COORD_ACTIONS_FOR_RECOVERY_OLDER_THAN", query = "select a.id, a.jobId, a.status, a.externalId from CoordinatorActionBean a where a.pending > 0 AND (a.status = 'SUSPENDED' OR a.status = 'KILLED' OR a.status = 'RUNNING') AND a.lastModifiedTimestamp <= :lastModifiedTime"),
+        @NamedQuery(name = "GET_COORD_ACTIONS_FOR_RECOVERY_OLDER_THAN", query = "select a.id, a.jobId, a.statusStr, a.externalId from CoordinatorActionBean a where a.pending > 0 AND (a.statusStr = 'SUSPENDED' OR a.statusStr = 'KILLED' OR a.statusStr = 'RUNNING') AND a.lastModifiedTimestamp <= :lastModifiedTime"),
         // Select query used by rerun, requires almost all columns so select * is used
-        @NamedQuery(name = "GET_ACTIONS_FOR_DATES", query = "select OBJECT(a) from CoordinatorActionBean a where a.jobId = :jobId AND (a.status = 'TIMEDOUT' OR a.status = 'SUCCEEDED' OR a.status = 'KILLED' OR a.status = 'FAILED') AND a.nominalTimestamp >= :startTime AND a.nominalTimestamp <= :endTime"),
+        @NamedQuery(name = "GET_ACTIONS_FOR_DATES", query = "select OBJECT(a) from CoordinatorActionBean a where a.jobId = :jobId AND (a.statusStr = 'TIMEDOUT' OR a.statusStr = 'SUCCEEDED' OR a.statusStr = 'KILLED' OR a.statusStr = 'FAILED') AND a.nominalTimestamp >= :startTime AND a.nominalTimestamp <= :endTime"),
         // Select query used by log
-        @NamedQuery(name = "GET_ACTION_IDS_FOR_DATES", query = "select a.id from CoordinatorActionBean a where a.jobId = :jobId AND (a.status = 'TIMEDOUT' OR a.status = 'SUCCEEDED' OR a.status = 'KILLED' OR a.status = 'FAILED') AND a.nominalTimestamp >= :startTime AND a.nominalTimestamp <= :endTime"),
+        @NamedQuery(name = "GET_ACTION_IDS_FOR_DATES", query = "select a.id from CoordinatorActionBean a where a.jobId = :jobId AND (a.statusStr = 'TIMEDOUT' OR a.statusStr = 'SUCCEEDED' OR a.statusStr = 'KILLED' OR a.statusStr = 'FAILED') AND a.nominalTimestamp >= :startTime AND a.nominalTimestamp <= :endTime"),
         // Select query used by rerun, requires almost all columns so select * is used
         @NamedQuery(name = "GET_ACTION_FOR_NOMINALTIME", query = "select OBJECT(a) from CoordinatorActionBean a where a.jobId = :jobId AND a.nominalTimestamp = :nominalTime"),
+
+        @NamedQuery(name = "GET_ACTIONS_BY_DATES_FOR_KILL", query = "select a.id, a.jobId, a.statusStr, a.externalId, a.pending, a.nominalTimestamp, a.createdTimestamp from CoordinatorActionBean a where a.jobId = :jobId AND (a.statusStr <> 'FAILED' AND a.statusStr <> 'KILLED' AND a.statusStr <> 'SUCCEEDED' AND a.statusStr <> 'TIMEDOUT') AND a.nominalTimestamp >= :startTime AND a.nominalTimestamp <= :endTime"),
 
         @NamedQuery(name = "GET_COORD_ACTIONS_COUNT", query = "select count(w) from CoordinatorActionBean w")})
 
@@ -142,8 +163,13 @@ import org.apache.openjpa.persistence.jdbc.Index;
 
     @NamedNativeQuery(name = "GET_READY_ACTIONS_GROUP_BY_JOBID", query = "select a.job_id as job_id, MIN(a.last_modified_time) as min_lmt from COORD_ACTIONS a where a.status = 'READY' GROUP BY a.job_id HAVING MIN(a.last_modified_time) < ?", resultSetMapping = "CoordActionJobIdLmt")
         })
-public class CoordinatorActionBean extends JsonCoordinatorAction implements
-        Writable {
+@Table(name = "COORD_ACTIONS")
+public class CoordinatorActionBean implements
+        Writable,CoordinatorAction,JsonBean {
+
+    @Id
+    private String id;
+
     @Basic
     @Index
     @Column(name = "job_id")
@@ -152,7 +178,7 @@ public class CoordinatorActionBean extends JsonCoordinatorAction implements
     @Basic
     @Index
     @Column(name = "status")
-    private String status = null;
+    private String statusStr = CoordinatorAction.Status.WAITING.toString();
 
     @Basic
     @Index
@@ -179,13 +205,82 @@ public class CoordinatorActionBean extends JsonCoordinatorAction implements
     @Column(name = "external_id")
     private String externalId;
 
+    @Basic
     @Column(name = "sla_xml")
     @Lob
-    private String slaXml = null;
+    @Strategy("org.apache.oozie.executor.jpa.StringBlobValueHandler")
+    private StringBlob slaXml = null;
 
     @Basic
     @Column(name = "pending")
     private int pending = 0;
+
+    @Basic
+    @Column(name = "job_type")
+    private String type;
+
+    @Basic
+    @Column(name = "action_number")
+    private int actionNumber;
+
+    @Basic
+    @Column(name = "created_conf")
+    @Lob
+    @Strategy("org.apache.oozie.executor.jpa.StringBlobValueHandler")
+    private StringBlob createdConf;
+
+    @Basic
+    @Column(name = "time_out")
+    private int timeOut = 0;
+
+    @Basic
+    @Column(name = "run_conf")
+    @Lob
+    @Strategy("org.apache.oozie.executor.jpa.StringBlobValueHandler")
+    private StringBlob runConf;
+
+    @Basic
+    @Column(name = "action_xml")
+    @Lob
+    @Strategy("org.apache.oozie.executor.jpa.StringBlobValueHandler")
+    private StringBlob actionXml;
+
+    @Basic
+    @Column(name = "missing_dependencies")
+    @Lob
+    @Strategy("org.apache.oozie.executor.jpa.StringBlobValueHandler")
+    private StringBlob missingDependencies;
+
+    @Basic
+    @Column(name = "push_missing_dependencies")
+    @Lob
+    @Strategy("org.apache.oozie.executor.jpa.StringBlobValueHandler")
+    private StringBlob pushMissingDependencies;
+
+    @Basic
+    @Column(name = "external_status")
+    private String externalStatus;
+
+    @Basic
+    @Column(name = "tracker_uri")
+    private String trackerUri;
+
+    @Basic
+    @Column(name = "console_url")
+    private String consoleUrl;
+
+    @Basic
+    @Column(name = "error_code")
+    private String errorCode;
+
+    @Basic
+    @Column(name = "error_message")
+    private String errorMessage;
+
+    @SuppressWarnings("unchecked")
+    public JSONObject toJSONObject() {
+        return toJSONObject("GMT");
+    }
 
     public CoordinatorActionBean() {
     }
@@ -251,46 +346,47 @@ public class CoordinatorActionBean extends JsonCoordinatorAction implements
         return this.jobId;
     }
 
-    @Override
     public void setJobId(String id) {
-        super.setJobId(id);
         this.jobId = id;
     }
 
     @Override
     public Status getStatus() {
-        return Status.valueOf(status);
+        return Status.valueOf(statusStr);
     }
 
-    @Override
+    /**
+     * Return the status in string
+     * @return
+     */
+    public String getStatusStr() {
+        return statusStr;
+    }
+
     public void setStatus(Status status) {
-        super.setStatus(status);
-        this.status = status.toString();
+        this.statusStr = status.toString();
     }
 
-    @Override
+    public void setStatusStr(String statusStr) {
+        this.statusStr = statusStr;
+    }
+
     public void setCreatedTime(Date createdTime) {
         this.createdTimestamp = DateUtils.convertDateToTimestamp(createdTime);
-        super.setCreatedTime(createdTime);
     }
 
     public void setRerunTime(Date rerunTime) {
         this.rerunTimestamp = DateUtils.convertDateToTimestamp(rerunTime);
     }
 
-    @Override
     public void setNominalTime(Date nominalTime) {
         this.nominalTimestamp = DateUtils.convertDateToTimestamp(nominalTime);
-        super.setNominalTime(nominalTime);
     }
 
-    @Override
     public void setLastModifiedTime(Date lastModifiedTime) {
         this.lastModifiedTimestamp = DateUtils.convertDateToTimestamp(lastModifiedTime);
-        super.setLastModifiedTime(lastModifiedTime);
     }
 
-    @Override
     public Date getCreatedTime() {
         return DateUtils.toDate(createdTimestamp);
     }
@@ -330,18 +426,29 @@ public class CoordinatorActionBean extends JsonCoordinatorAction implements
         return externalId;
     }
 
-    @Override
     public void setExternalId(String externalId) {
-        super.setExternalId(externalId);
         this.externalId = externalId;
     }
 
-    public String getSlaXml() {
+    public StringBlob getSlaXmlBlob() {
         return slaXml;
     }
 
-    public void setSlaXml(String slaXml) {
+    public void setSlaXmlBlob(StringBlob slaXml) {
         this.slaXml = slaXml;
+    }
+
+    public String getSlaXml() {
+        return slaXml == null ? null : slaXml.getString();
+    }
+
+    public void setSlaXml(String slaXml) {
+        if (this.slaXml == null) {
+            this.slaXml = new StringBlob(slaXml);
+        }
+        else {
+            this.slaXml.setString(slaXml);
+        }
     }
 
     /**
@@ -362,6 +469,22 @@ public class CoordinatorActionBean extends JsonCoordinatorAction implements
                 break;
         }
         return isTerminal;
+    }
+
+    /**
+     * Return if the action is complete with failure.
+     *
+     * @return if the action is complete with failure.
+     */
+    public boolean isTerminalWithFailure() {
+        boolean result = false;
+        switch (getStatus()) {
+            case FAILED:
+            case KILLED:
+            case TIMEDOUT:
+                result = true;
+        }
+        return result;
     }
 
     /**
@@ -410,4 +533,287 @@ public class CoordinatorActionBean extends JsonCoordinatorAction implements
     public boolean isPending() {
         return pending > 0 ? true : false;
     }
+
+    @Override
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getType() {
+        return type;
+    }
+
+    public void setType(String type) {
+        this.type = type;
+    }
+
+    public void setActionNumber(int actionNumber) {
+        this.actionNumber = actionNumber;
+    }
+
+    @Override
+    public int getActionNumber() {
+        return actionNumber;
+    }
+
+    @Override
+    public String getCreatedConf() {
+        return createdConf == null ? null : createdConf.getString();
+    }
+
+    public void setCreatedConf(String createdConf) {
+        if (this.createdConf == null) {
+            this.createdConf = new StringBlob(createdConf);
+        }
+        else {
+            this.createdConf.setString(createdConf);
+        }
+    }
+
+    public void setCreatedConfBlob(StringBlob createdConf) {
+        this.createdConf = createdConf;
+    }
+
+    public StringBlob getCreatedConfBlob() {
+        return createdConf;
+    }
+
+    public void setRunConf(String runConf) {
+        if (this.runConf == null) {
+            this.runConf = new StringBlob(runConf);
+        }
+        else {
+            this.runConf.setString(runConf);
+        }
+    }
+
+    @Override
+    public String getRunConf() {
+        return runConf == null ? null : runConf.getString();
+    }
+
+    public void setRunConfBlob(StringBlob runConf) {
+        this.runConf = runConf;
+    }
+
+    public StringBlob getRunConfBlob() {
+        return runConf;
+    }
+
+
+    public void setMissingDependencies(String missingDependencies) {
+        if (this.missingDependencies == null) {
+            this.missingDependencies = new StringBlob(missingDependencies);
+        }
+        else {
+            this.missingDependencies.setString(missingDependencies);
+        }
+    }
+
+    @Override
+    public String getMissingDependencies() {
+        return missingDependencies == null ? null : missingDependencies.getString();
+    }
+
+    public void setMissingDependenciesBlob(StringBlob missingDependencies) {
+        this.missingDependencies = missingDependencies;
+    }
+
+    public StringBlob getMissingDependenciesBlob() {
+        return missingDependencies;
+    }
+
+    @Override
+    public String getPushMissingDependencies() {
+        return pushMissingDependencies == null ? null : pushMissingDependencies.getString();
+    }
+
+    public void setPushMissingDependencies(String pushMissingDependencies) {
+        if (this.pushMissingDependencies == null) {
+            this.pushMissingDependencies = new StringBlob(pushMissingDependencies);
+        }
+        else {
+            this.pushMissingDependencies.setString(pushMissingDependencies);
+        }
+    }
+
+    public void setPushMissingDependenciesBlob(StringBlob pushMissingDependencies) {
+        this.pushMissingDependencies = pushMissingDependencies;
+    }
+
+    public StringBlob getPushMissingDependenciesBlob() {
+        return pushMissingDependencies;
+    }
+
+    public String getExternalStatus() {
+        return externalStatus;
+    }
+
+    public void setExternalStatus(String externalStatus) {
+        this.externalStatus = externalStatus;
+    }
+
+    @Override
+    public String getTrackerUri() {
+        return trackerUri;
+    }
+
+    public void setTrackerUri(String trackerUri) {
+        this.trackerUri = trackerUri;
+    }
+
+    @Override
+    public String getConsoleUrl() {
+        return consoleUrl;
+    }
+
+    public void setConsoleUrl(String consoleUrl) {
+        this.consoleUrl = consoleUrl;
+    }
+
+    @Override
+    public String getErrorCode() {
+        return errorCode;
+    }
+
+    @Override
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorInfo(String errorCode, String errorMessage) {
+        this.errorCode = errorCode;
+        this.errorMessage = errorMessage;
+    }
+
+    public String getActionXml() {
+        return actionXml == null ? null : actionXml.getString();
+    }
+
+    public void setActionXml(String actionXml) {
+        if (this.actionXml == null) {
+            this.actionXml = new StringBlob(actionXml);
+        }
+        else {
+            this.actionXml.setString(actionXml);
+        }
+    }
+
+    public void setActionXmlBlob(StringBlob actionXml) {
+        this.actionXml = actionXml;
+    }
+
+    public StringBlob getActionXmlBlob() {
+        return actionXml;
+    }
+
+    @Override
+    public String toString() {
+        return MessageFormat.format("CoordinatorAction name[{0}] status[{1}]",
+                                    getId(), getStatus());
+    }
+
+    public int getTimeOut() {
+        return timeOut;
+    }
+
+    public void setTimeOut(int timeOut) {
+        this.timeOut = timeOut;
+    }
+
+
+    public void setErrorCode(String errorCode) {
+        this.errorCode = errorCode;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+
+    @SuppressWarnings("unchecked")
+    public JSONObject toJSONObject(String timeZoneId) {
+        JSONObject json = new JSONObject();
+        json.put(JsonTags.COORDINATOR_ACTION_ID, id);
+        json.put(JsonTags.COORDINATOR_JOB_ID, jobId);
+        json.put(JsonTags.COORDINATOR_ACTION_TYPE, type);
+        json.put(JsonTags.COORDINATOR_ACTION_NUMBER, actionNumber);
+        json.put(JsonTags.COORDINATOR_ACTION_CREATED_CONF, getCreatedConf());
+        json.put(JsonTags.COORDINATOR_ACTION_CREATED_TIME, JsonUtils
+                .formatDateRfc822(getCreatedTime(), timeZoneId));
+        json.put(JsonTags.COORDINATOR_ACTION_NOMINAL_TIME, JsonUtils
+                .formatDateRfc822(getNominalTime(), timeZoneId));
+        json.put(JsonTags.COORDINATOR_ACTION_EXTERNALID, externalId);
+        // json.put(JsonTags.COORDINATOR_ACTION_START_TIME, JsonUtils
+        // .formatDateRfc822(startTime), timeZoneId);
+        json.put(JsonTags.COORDINATOR_ACTION_STATUS, statusStr);
+        json.put(JsonTags.COORDINATOR_ACTION_RUNTIME_CONF, getRunConf());
+        json.put(JsonTags.COORDINATOR_ACTION_LAST_MODIFIED_TIME, JsonUtils
+                .formatDateRfc822(getLastModifiedTime(), timeZoneId));
+        // json.put(JsonTags.COORDINATOR_ACTION_START_TIME, JsonUtils
+        // .formatDateRfc822(startTime), timeZoneId);
+        // json.put(JsonTags.COORDINATOR_ACTION_END_TIME, JsonUtils
+        // .formatDateRfc822(endTime), timeZoneId);
+        json.put(JsonTags.COORDINATOR_ACTION_MISSING_DEPS, getMissingDependencies());
+        json.put(JsonTags.COORDINATOR_ACTION_PUSH_MISSING_DEPS, getPushMissingDependencies());
+        json.put(JsonTags.COORDINATOR_ACTION_EXTERNAL_STATUS, externalStatus);
+        json.put(JsonTags.COORDINATOR_ACTION_TRACKER_URI, trackerUri);
+        json.put(JsonTags.COORDINATOR_ACTION_CONSOLE_URL, consoleUrl);
+        json.put(JsonTags.COORDINATOR_ACTION_ERROR_CODE, errorCode);
+        json.put(JsonTags.COORDINATOR_ACTION_ERROR_MESSAGE, errorMessage);
+        json.put(JsonTags.TO_STRING, toString());
+        return json;
+    }
+
+    /**
+     * Convert a nodes list into a JSONArray.
+     *
+     * @param actions nodes list.
+     * @param timeZoneId time zone to use for dates in the JSON array.
+     * @return the corresponding JSON array.
+     */
+    @SuppressWarnings("unchecked")
+    public static JSONArray toJSONArray(List<CoordinatorActionBean> actions, String timeZoneId) {
+        JSONArray array = new JSONArray();
+        for (CoordinatorActionBean action : actions) {
+            array.add(action.toJSONObject(timeZoneId));
+        }
+        return array;
+    }
+
+    @Override
+    public int hashCode() {
+        final int prime = 31;
+        int result = 1;
+        result = prime * result + ((id == null) ? 0 : id.hashCode());
+        return result;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (obj == null) {
+            return false;
+        }
+        if (getClass() != obj.getClass()) {
+            return false;
+        }
+        CoordinatorActionBean other = (CoordinatorActionBean) obj;
+        if (id == null) {
+            if (other.id != null) {
+                return false;
+            }
+        }
+        else if (!id.equals(other.id)) {
+            return false;
+        }
+        return true;
+    }
+
+
 }

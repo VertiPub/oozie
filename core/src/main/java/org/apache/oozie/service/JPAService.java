@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,11 +19,16 @@ package org.apache.oozie.service;
 
 import java.io.IOException;
 import java.text.MessageFormat;
+import java.util.Collection;
+import java.util.List;
 import java.util.Properties;
 
 import javax.persistence.EntityManager;
 import javax.persistence.EntityManagerFactory;
+import javax.persistence.NoResultException;
 import javax.persistence.Persistence;
+import javax.persistence.PersistenceException;
+import javax.persistence.Query;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.BundleActionBean;
@@ -35,14 +40,13 @@ import org.apache.oozie.FaultInjection;
 import org.apache.oozie.SLAEventBean;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
-import org.apache.oozie.client.rest.JsonBundleJob;
-import org.apache.oozie.client.rest.JsonCoordinatorAction;
-import org.apache.oozie.client.rest.JsonCoordinatorJob;
+import org.apache.oozie.client.rest.JsonBean;
 import org.apache.oozie.client.rest.JsonSLAEvent;
-import org.apache.oozie.client.rest.JsonWorkflowAction;
-import org.apache.oozie.client.rest.JsonWorkflowJob;
+import org.apache.oozie.compression.CodecFactory;
 import org.apache.oozie.executor.jpa.JPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
+import org.apache.oozie.sla.SLARegistrationBean;
+import org.apache.oozie.sla.SLASummaryBean;
 import org.apache.oozie.util.IOUtils;
 import org.apache.oozie.util.Instrumentable;
 import org.apache.oozie.util.Instrumentation;
@@ -52,8 +56,9 @@ import org.apache.openjpa.persistence.OpenJPAEntityManagerFactorySPI;
 /**
  * Service that manages JPA and executes {@link JPAExecutor}.
  */
+@SuppressWarnings("deprecation")
 public class JPAService implements Service, Instrumentable {
-    private static final String INSTRUMENTATION_GROUP = "jpa";
+    private static final String INSTRUMENTATION_GROUP_JPA = "jpa";
 
     public static final String CONF_DB_SCHEMA = "oozie.db.schema.name";
 
@@ -160,15 +165,12 @@ public class JPAService implements Service, Instrumentable {
         entityManager.find(WorkflowJobBean.class, 1);
         entityManager.find(CoordinatorActionBean.class, 1);
         entityManager.find(CoordinatorJobBean.class, 1);
-        entityManager.find(JsonWorkflowAction.class, 1);
-        entityManager.find(JsonWorkflowJob.class, 1);
-        entityManager.find(JsonCoordinatorAction.class, 1);
-        entityManager.find(JsonCoordinatorJob.class, 1);
         entityManager.find(SLAEventBean.class, 1);
         entityManager.find(JsonSLAEvent.class, 1);
         entityManager.find(BundleJobBean.class, 1);
-        entityManager.find(JsonBundleJob.class, 1);
         entityManager.find(BundleActionBean.class, 1);
+        entityManager.find(SLARegistrationBean.class, 1);
+        entityManager.find(SLASummaryBean.class, 1);
 
         LOG.info(XLog.STD, "All entities initialized");
         // need to use a pseudo no-op transaction so all entities, datasource
@@ -180,6 +182,12 @@ public class JPAService implements Service, Instrumentable {
         LOG.info("JPA configuration: {0}", logMsg);
         entityManager.getTransaction().commit();
         entityManager.close();
+        try {
+            CodecFactory.initialize(conf);
+        }
+        catch (Exception ex) {
+            throw new ServiceException(ErrorCode.E1700, ex);
+        }
     }
 
     /**
@@ -204,7 +212,7 @@ public class JPAService implements Service, Instrumentable {
         try {
             LOG.trace("Executing JPAExecutor [{0}]", executor.getName());
             if (instr != null) {
-                instr.incr(INSTRUMENTATION_GROUP, executor.getName(), 1);
+                instr.incr(INSTRUMENTATION_GROUP_JPA, executor.getName(), 1);
             }
             cron.start();
             em.getTransaction().begin();
@@ -218,10 +226,13 @@ public class JPAService implements Service, Instrumentable {
             }
             return t;
         }
+        catch (PersistenceException e) {
+            throw new JPAExecutorException(ErrorCode.E0603, e);
+        }
         finally {
             cron.stop();
             if (instr != null) {
-                instr.addCron(INSTRUMENTATION_GROUP, executor.getName(), cron);
+                instr.addCron(INSTRUMENTATION_GROUP_JPA, executor.getName(), cron);
             }
             try {
                 if (em.getTransaction().isActive()) {
@@ -249,11 +260,225 @@ public class JPAService implements Service, Instrumentable {
     }
 
     /**
+     * Execute an UPDATE query
+     * @param namedQueryName the name of query to be executed
+     * @param query query instance to be executed
+     * @param em Entity Manager
+     * @return Integer that query returns, which corresponds to the number of rows updated
+     * @throws JPAExecutorException
+     */
+    public int executeUpdate(String namedQueryName, Query query, EntityManager em) throws JPAExecutorException {
+        Instrumentation.Cron cron = new Instrumentation.Cron();
+        try {
+
+            LOG.trace("Executing Update/Delete Query [{0}]", namedQueryName);
+            if (instr != null) {
+                instr.incr(INSTRUMENTATION_GROUP_JPA, namedQueryName, 1);
+            }
+            cron.start();
+            em.getTransaction().begin();
+            int ret = query.executeUpdate();
+            if (em.getTransaction().isActive()) {
+                if (FaultInjection.isActive("org.apache.oozie.command.SkipCommitFaultInjection")) {
+                    throw new RuntimeException("Skipping Commit for Failover Testing");
+                }
+                em.getTransaction().commit();
+            }
+            return ret;
+        }
+        catch (PersistenceException e) {
+            throw new JPAExecutorException(ErrorCode.E0603, e);
+        }
+        finally {
+            processFinally(em, cron, namedQueryName);
+        }
+    }
+
+    public static class QueryEntry<E extends Enum<E>> {
+        E namedQuery;
+        Query query;
+
+        public QueryEntry(E namedQuery, Query query) {
+            this.namedQuery = namedQuery;
+            this.query = query;
+        }
+
+        public Query getQuery() {
+            return this.query;
+        }
+
+        public E getQueryName() {
+            return this.namedQuery;
+        }
+    }
+
+    private void processFinally(EntityManager em, Instrumentation.Cron cron, String name){
+        cron.stop();
+        if (instr != null) {
+            instr.addCron(INSTRUMENTATION_GROUP_JPA, name, cron);
+        }
+        try {
+            if (em.getTransaction().isActive()) {
+                LOG.warn("[{0}] ended with an active transaction, rolling back", name);
+                em.getTransaction().rollback();
+            }
+        }
+        catch (Exception ex) {
+            LOG.warn("Could not check/rollback transaction after [{0}], {1}", name,
+                    ex.getMessage(), ex);
+        }
+        try {
+            if (em.isOpen()) {
+                em.close();
+            }
+            else {
+                LOG.warn("[{0}] closed the EntityManager, it should not!", name);
+            }
+        }
+        catch (Exception ex) {
+            LOG.warn("Could not close EntityManager after [{0}], {1}", name, ex.getMessage(), ex);
+        }
+    }
+
+    /**
+     * Execute multiple update/insert queries in one transaction
+     * @param insertBeans list of beans to be inserted
+     * @param updateQueryList list of update queries
+     * @param deleteBeans list of beans to be deleted
+     * @param em Entity Manager
+     * @throws JPAExecutorException
+     */
+    public void executeBatchInsertUpdateDelete(Collection<JsonBean> insertBeans, List<QueryEntry> updateQueryList,
+            Collection<JsonBean> deleteBeans, EntityManager em) throws JPAExecutorException {
+        Instrumentation.Cron cron = new Instrumentation.Cron();
+        try {
+
+            LOG.trace("Executing Queries in Batch");
+            cron.start();
+            em.getTransaction().begin();
+            if (updateQueryList != null && updateQueryList.size() > 0) {
+                for (QueryEntry q : updateQueryList) {
+                    if (instr != null) {
+                        instr.incr(INSTRUMENTATION_GROUP_JPA, q.getQueryName().name(), 1);
+                    }
+                    q.getQuery().executeUpdate();
+                }
+            }
+            if (insertBeans != null && insertBeans.size() > 0) {
+                for (JsonBean bean : insertBeans) {
+                    em.persist(bean);
+                }
+            }
+            if (deleteBeans != null && deleteBeans.size() > 0) {
+                for (JsonBean bean : deleteBeans) {
+                    em.remove(em.merge(bean));
+                }
+            }
+            if (em.getTransaction().isActive()) {
+                if (FaultInjection.isActive("org.apache.oozie.command.SkipCommitFaultInjection")) {
+                    throw new RuntimeException("Skipping Commit for Failover Testing");
+                }
+                em.getTransaction().commit();
+            }
+        }
+        catch (PersistenceException e) {
+            throw new JPAExecutorException(ErrorCode.E0603, e);
+        }
+        finally {
+            processFinally(em, cron, "batchqueryexecutor");
+        }
+    }
+
+    /**
+     * Execute a SELECT query
+     * @param namedQueryName the name of query to be executed
+     * @param query query instance to be executed
+     * @param em Entity Manager
+     * @return object that matches the query
+     * @throws JPAExecutorException
+     */
+    public Object executeGet(String namedQueryName, Query query, EntityManager em) throws JPAExecutorException {
+        Instrumentation.Cron cron = new Instrumentation.Cron();
+        try {
+
+            LOG.trace("Executing Select Query to Get a Single row  [{0}]", namedQueryName);
+            if (instr != null) {
+                instr.incr(INSTRUMENTATION_GROUP_JPA, namedQueryName, 1);
+            }
+
+            cron.start();
+            em.getTransaction().begin();
+            Object obj = null;
+            try {
+                obj = query.getSingleResult();
+            }
+            catch (NoResultException e) {
+                // return null when no matched result
+            }
+            if (em.getTransaction().isActive()) {
+                if (FaultInjection.isActive("org.apache.oozie.command.SkipCommitFaultInjection")) {
+                    throw new RuntimeException("Skipping Commit for Failover Testing");
+                }
+                em.getTransaction().commit();
+            }
+            return obj;
+        }
+        catch (PersistenceException e) {
+            throw new JPAExecutorException(ErrorCode.E0603, e);
+        }
+        finally {
+            processFinally(em, cron, namedQueryName);
+        }
+    }
+
+    /**
+     * Execute a SELECT query to get list of results
+     * @param namedQueryName the name of query to be executed
+     * @param query query instance to be executed
+     * @param em Entity Manager
+     * @return list containing results that match the query
+     * @throws JPAExecutorException
+     */
+    public List executeGetList(String namedQueryName, Query query, EntityManager em) throws JPAExecutorException {
+        Instrumentation.Cron cron = new Instrumentation.Cron();
+        try {
+
+            LOG.trace("Executing Select Query to Get Multiple Rows [{0}]", namedQueryName);
+            if (instr != null) {
+                instr.incr(INSTRUMENTATION_GROUP_JPA, namedQueryName, 1);
+            }
+
+            cron.start();
+            em.getTransaction().begin();
+            List resultList = null;
+            try {
+                resultList = query.getResultList();
+            }
+            catch (NoResultException e) {
+                // return null when no matched result
+            }
+            if (em.getTransaction().isActive()) {
+                if (FaultInjection.isActive("org.apache.oozie.command.SkipCommitFaultInjection")) {
+                    throw new RuntimeException("Skipping Commit for Failover Testing");
+                }
+                em.getTransaction().commit();
+            }
+            return resultList;
+        }
+        catch (PersistenceException e) {
+            throw new JPAExecutorException(ErrorCode.E0603, e);
+        }
+        finally {
+            processFinally(em, cron, namedQueryName);
+        }
+    }
+
+    /**
      * Return an EntityManager. Used by the StoreService. Once the StoreService is removed this method must be removed.
      *
      * @return an entity manager
      */
-    EntityManager getEntityManager() {
+    public EntityManager getEntityManager() {
         return factory.createEntityManager();
     }
 

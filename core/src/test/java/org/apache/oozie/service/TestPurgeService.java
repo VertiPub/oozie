@@ -40,7 +40,7 @@ import org.apache.oozie.DagEngineException;
 import org.apache.oozie.ForTestingActionExecutor;
 import org.apache.oozie.WorkflowJobBean;
 import org.apache.oozie.ErrorCode;
-import org.apache.oozie.command.wf.PurgeXCommand;
+import org.apache.oozie.command.PurgeXCommand;
 import org.apache.oozie.executor.jpa.BundleActionGetJPAExecutor;
 import org.apache.oozie.executor.jpa.BundleJobGetJPAExecutor;
 import org.apache.oozie.executor.jpa.BundleJobInsertJPAExecutor;
@@ -49,7 +49,8 @@ import org.apache.oozie.executor.jpa.CoordJobGetJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobInsertJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.executor.jpa.WorkflowJobGetJPAExecutor;
-import org.apache.oozie.executor.jpa.WorkflowJobUpdateJPAExecutor;
+import org.apache.oozie.executor.jpa.WorkflowJobQueryExecutor;
+import org.apache.oozie.executor.jpa.WorkflowJobQueryExecutor.WorkflowJobQuery;
 import org.apache.oozie.service.PurgeService.PurgeRunnable;
 import org.apache.oozie.test.XDataTestCase;
 import org.apache.oozie.util.DateUtils;
@@ -96,7 +97,7 @@ public class TestPurgeService extends XDataTestCase {
         Writer writer = new FileWriter(getTestCaseDir() + "/workflow.xml");
         IOUtils.copyCharStream(reader, writer);
 
-        final DagEngine engine = new DagEngine("u", "a");
+        final DagEngine engine = new DagEngine("u");
         Configuration conf = new XConfiguration();
         conf.set(OozieClient.APP_PATH, "file://" + getTestCaseDir() + File.separator + "workflow.xml");
         conf.setStrings(OozieClient.USER_NAME, getTestUser());
@@ -114,7 +115,7 @@ public class TestPurgeService extends XDataTestCase {
             }
         });
         assertEquals(WorkflowJob.Status.SUCCEEDED, engine.getJob(jobId).getStatus());
-        new PurgeXCommand(1, 10000).call();
+        new PurgeXCommand(1, 1, 1, 10000).call();
         sleep(1000);
 
         JPAService jpaService = Services.get().get(JPAService.class);
@@ -122,8 +123,8 @@ public class TestPurgeService extends XDataTestCase {
         WorkflowJobBean wfBean = jpaService.execute(wfJobGetCmd);
         Date endDate = new Date(System.currentTimeMillis() - 2 * 24 * 60 * 60 * 1000);
         wfBean.setEndTime(endDate);
-        WorkflowJobUpdateJPAExecutor wfUpdateCmd = new WorkflowJobUpdateJPAExecutor(wfBean);
-        jpaService.execute(wfUpdateCmd);
+        wfBean.setLastModifiedTime(new Date());
+        WorkflowJobQueryExecutor.getInstance().executeUpdate(WorkflowJobQuery.UPDATE_WORKFLOW_STATUS_INSTANCE_MOD_END, wfBean);
 
         Runnable purgeRunnable = new PurgeRunnable(1, 1, 1, 100);
         purgeRunnable.run();
@@ -184,7 +185,7 @@ public class TestPurgeService extends XDataTestCase {
         Runnable purgeRunnable = new PurgeRunnable(1, 1, 1, 100);
         purgeRunnable.run();
 
-        final CoordinatorEngine engine = new CoordinatorEngine("u", "a");
+        final CoordinatorEngine engine = new CoordinatorEngine("u");
         waitFor(10000, new Predicate() {
             public boolean evaluate() throws Exception {
                 try {
@@ -247,7 +248,7 @@ public class TestPurgeService extends XDataTestCase {
         Runnable purgeRunnable = new PurgeRunnable(1, 1, 1, 100);
         purgeRunnable.run();
 
-        final BundleEngine engine = new BundleEngine("u", "a");
+        final BundleEngine engine = new BundleEngine("u");
         waitFor(10000, new Predicate() {
             public boolean evaluate() throws Exception {
                 try {

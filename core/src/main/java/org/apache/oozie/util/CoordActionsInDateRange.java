@@ -21,7 +21,7 @@ package org.apache.oozie.util;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -29,6 +29,7 @@ import org.apache.oozie.CoordinatorActionBean;
 import org.apache.oozie.ErrorCode;
 import org.apache.oozie.XException;
 import org.apache.oozie.executor.jpa.CoordJobGetActionIdsForDateRangeJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordJobGetActionsByDatesForKillJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetActionsForDatesJPAExecutor;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.Services;
@@ -45,7 +46,8 @@ public class CoordActionsInDateRange {
      * Get the list of Coordinator action Ids for given date ranges
      *
      * @param jobId coordinator job id
-     * @param scope the date range for log. format is comma-separated list of date ranges. Each date range element is specified with two dates separated by '::'
+     * @param scope the date range for log. format is comma-separated list of date ranges.
+     * Each date range element is specified with two dates separated by '::'
      * @return the list of coordinator action Ids for the date range
      *
      * Internally involves a database operation by invoking method 'getActionIdsFromDateRange'.
@@ -53,7 +55,8 @@ public class CoordActionsInDateRange {
     public static List<String> getCoordActionIdsFromDates(String jobId, String scope) throws XException {
         ParamChecker.notEmpty(jobId, "jobId");
         ParamChecker.notEmpty(scope, "scope");
-        Set<String> actionSet = new HashSet<String>();
+        // Use an ordered set to achieve reproducible behavior.
+        Set<String> actionSet = new LinkedHashSet<String>();
         String[] list = scope.split(",");
         for (String s : list) {
             s = s.trim();
@@ -75,11 +78,14 @@ public class CoordActionsInDateRange {
      * @return the list of Coordinator actions for the date range
      * @throws XException
      */
-    public static List<CoordinatorActionBean> getCoordActionsFromDateRange(String jobId, String range) throws XException{
+    public static List<CoordinatorActionBean> getCoordActionsFromDateRange(String jobId, String range, boolean active)
+            throws XException {
             String[] dateRange = range.split("::");
             // This block checks for errors in the format of specifying date range
             if (dateRange.length != 2) {
-                throw new XException(ErrorCode.E0308, "'" + range + "'. Date value expected on both sides of the scope resolution operator '::' to signify start and end of range");
+                throw new XException(ErrorCode.E0308, "'" + range +
+                    "'. Date value expected on both sides of the scope resolution operator '::' to signify start and end of range");
+
             }
             Date start;
             Date end;
@@ -92,9 +98,10 @@ public class CoordActionsInDateRange {
                 throw new XException(ErrorCode.E0308, "Error in parsing start or end date. " + dx);
             }
             if (start.after(end)) {
-                throw new XException(ErrorCode.E0308, "'" + range + "'. Start date '" + start + "' is older than end date: '" + end + "'");
+                throw new XException(ErrorCode.E0308, "'" + range + "'. Start date '" + start + "' is older than end date: '" + end
+                        + "'");
             }
-            List<CoordinatorActionBean> listOfActions = getActionsFromDateRange(jobId, start, end);
+            List<CoordinatorActionBean> listOfActions = getActionsFromDateRange(jobId, start, end, active);
             return listOfActions;
     }
 
@@ -109,7 +116,9 @@ public class CoordActionsInDateRange {
             String[] dateRange = range.split("::");
             // This block checks for errors in the format of specifying date range
             if (dateRange.length != 2) {
-                throw new XException(ErrorCode.E0308, "'" + range + "'. Date value expected on both sides of the scope resolution operator '::' to signify start and end of range");
+                throw new XException(ErrorCode.E0308, "'" + range
+                  + "'. Date value expected on both sides of the scope resolution operator '::' to signify start and end of range");
+
             }
             Date start;
             Date end;
@@ -122,7 +131,8 @@ public class CoordActionsInDateRange {
                 throw new XException(ErrorCode.E0308, "Error in parsing start or end date. " + dx);
             }
             if (start.after(end)) {
-                throw new XException(ErrorCode.E0308, "'" + range + "'. Start date '" + start + "' is older than end date: '" + end + "'");
+                throw new XException(ErrorCode.E0308, "'" + range + "'. Start date '" + start + "' is older than end date: '" + end
++ "'");
             }
             List<String> list = null;
             JPAService jpaService = Services.get().get(JPAService.class);
@@ -138,10 +148,16 @@ public class CoordActionsInDateRange {
      * @param end end time
      * @return a list of coordinator actions that correspond to the date range
      */
-    private static List<CoordinatorActionBean> getActionsFromDateRange(String jobId, Date start, Date end) throws XException{
+    private static List<CoordinatorActionBean> getActionsFromDateRange(String jobId, Date start, Date end,
+            boolean active) throws XException {
         List<CoordinatorActionBean> list;
         JPAService jpaService = Services.get().get(JPAService.class);
-        list = jpaService.execute(new CoordJobGetActionsForDatesJPAExecutor(jobId, start, end));
+        if (!active) {
+            list = jpaService.execute(new CoordJobGetActionsForDatesJPAExecutor(jobId, start, end));
+        }
+        else {
+            list = jpaService.execute(new CoordJobGetActionsByDatesForKillJPAExecutor(jobId, start, end));
+        }
         return list;
     }
 }

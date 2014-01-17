@@ -19,51 +19,43 @@ package org.apache.oozie.action.hadoop;
 
 import static org.apache.oozie.action.hadoop.LauncherMapper.CONF_OOZIE_ACTION_MAIN_CLASS;
 
+import java.util.ArrayList;
 import java.util.List;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.oozie.action.ActionExecutorException;
 import org.apache.oozie.client.WorkflowAction;
+import org.apache.oozie.client.XOozieClient;
 import org.jdom.Element;
 import org.jdom.JDOMException;
 import org.jdom.Namespace;
 
-public class HiveActionExecutor extends JavaActionExecutor {
+public class HiveActionExecutor extends ScriptLanguageActionExecutor {
+
+    private static final String HIVE_MAIN_CLASS_NAME = "org.apache.oozie.action.hadoop.HiveMain";
+    static final String HIVE_SCRIPT = "oozie.hive.script";
+    static final String HIVE_PARAMS = "oozie.hive.params";
+    static final String HIVE_ARGS = "oozie.hive.args";
 
     public HiveActionExecutor() {
         super("hive");
     }
 
     @Override
-    protected List<Class> getLauncherClasses() {
-        List<Class> classes = super.getLauncherClasses();
-        classes.add(LauncherMain.class);
-        classes.add(MapReduceMain.class);
-        classes.add(HiveMain.class);
+    public List<Class> getLauncherClasses() {
+        List<Class> classes = new ArrayList<Class>();
+        try {
+            classes.add(Class.forName(HIVE_MAIN_CLASS_NAME));
+        }
+        catch (ClassNotFoundException e) {
+            throw new RuntimeException("Class not found", e);
+	}
         return classes;
     }
 
     @Override
     protected String getLauncherMain(Configuration launcherConf, Element actionXml) {
-        return launcherConf.get(CONF_OOZIE_ACTION_MAIN_CLASS, HiveMain.class.getName());
-    }
-
-    @Override
-    protected Configuration setupLauncherConf(Configuration conf, Element actionXml, Path appPath, Context context)
-            throws ActionExecutorException {
-        try {
-            super.setupLauncherConf(conf, actionXml, appPath, context);
-            Namespace ns = actionXml.getNamespace();
-
-            String script = actionXml.getChild("script", ns).getTextTrim();
-            String scriptName = new Path(script).getName();
-            addToCache(conf, appPath, script + "#" + scriptName, false);
-            return conf;
-        }
-        catch (Exception ex) {
-            throw convertException(ex);
-        }
+        return launcherConf.get(CONF_OOZIE_ACTION_MAIN_CLASS, HIVE_MAIN_CLASS_NAME);
     }
 
     @Override
@@ -75,16 +67,34 @@ public class HiveActionExecutor extends JavaActionExecutor {
         Namespace ns = actionXml.getNamespace();
         String script = actionXml.getChild("script", ns).getTextTrim();
         String scriptName = new Path(script).getName();
-        addToCache(conf, appPath, script + "#" + scriptName, false);
+        String hiveScriptContent = context.getProtoActionConf().get(XOozieClient.HIVE_SCRIPT);
+
+        if (hiveScriptContent == null){
+            addToCache(conf, appPath, script + "#" + scriptName, false);
+        }
 
         List<Element> params = (List<Element>) actionXml.getChildren("param", ns);
         String[] strParams = new String[params.size()];
         for (int i = 0; i < params.size(); i++) {
             strParams[i] = params.get(i).getTextTrim();
         }
+        String[] strArgs = null;
+        List<Element> eArgs = actionXml.getChildren("argument", ns);
+        if (eArgs != null && eArgs.size() > 0) {
+            strArgs = new String[eArgs.size()];
+            for (int i = 0; i < eArgs.size(); i++) {
+                strArgs[i] = eArgs.get(i).getTextTrim();
+            }
+        }
 
-        HiveMain.setHiveScript(conf, scriptName, strParams);
+        setHiveScript(conf, scriptName, strParams, strArgs);
         return conf;
+    }
+
+    public static void setHiveScript(Configuration conf, String script, String[] params, String[] args) {
+        conf.set(HIVE_SCRIPT, script);
+        MapReduceMain.setStrings(conf, HIVE_PARAMS, params);
+        MapReduceMain.setStrings(conf, HIVE_ARGS, args);
     }
 
     @Override
@@ -101,6 +111,10 @@ public class HiveActionExecutor extends JavaActionExecutor {
     @Override
     protected String getDefaultShareLibName(Element actionXml) {
         return "hive";
+    }
+
+    protected String getScriptName() {
+        return XOozieClient.HIVE_SCRIPT;
     }
 
 }

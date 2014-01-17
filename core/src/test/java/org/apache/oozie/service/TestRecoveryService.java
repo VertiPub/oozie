@@ -25,8 +25,12 @@ import java.io.PrintWriter;
 import java.io.Reader;
 import java.io.StringReader;
 import java.io.Writer;
+import java.net.URI;
+import java.util.Collection;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -41,7 +45,7 @@ import org.apache.oozie.DagEngine;
 import org.apache.oozie.ForTestingActionExecutor;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
-import org.apache.oozie.action.hadoop.LauncherMapper;
+import org.apache.oozie.action.hadoop.LauncherMapperHelper;
 import org.apache.oozie.action.hadoop.MapReduceActionExecutor;
 import org.apache.oozie.action.hadoop.MapperReducerForTest;
 import org.apache.oozie.client.CoordinatorAction;
@@ -52,9 +56,11 @@ import org.apache.oozie.client.WorkflowJob;
 import org.apache.oozie.client.CoordinatorJob.Execution;
 import org.apache.oozie.command.wf.ActionXCommand;
 import org.apache.oozie.command.wf.ActionXCommand.ActionExecutorContext;
+import org.apache.oozie.coord.CoordELFunctions;
+import org.apache.oozie.dependency.FSURIHandler;
+import org.apache.oozie.dependency.HCatURIHandler;
 import org.apache.oozie.executor.jpa.CoordActionGetJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordActionInsertJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordJobInsertJPAExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
 import org.apache.oozie.executor.jpa.WorkflowActionGetJPAExecutor;
 import org.apache.oozie.executor.jpa.WorkflowActionInsertJPAExecutor;
@@ -65,6 +71,7 @@ import org.apache.oozie.store.StoreException;
 import org.apache.oozie.store.WorkflowStore;
 import org.apache.oozie.test.XDataTestCase;
 import org.apache.oozie.util.DateUtils;
+import org.apache.oozie.util.HCatURI;
 import org.apache.oozie.util.IOUtils;
 import org.apache.oozie.util.XConfiguration;
 import org.apache.oozie.util.XLog;
@@ -73,15 +80,18 @@ import org.apache.oozie.workflow.WorkflowInstance;
 
 public class TestRecoveryService extends XDataTestCase {
     private Services services;
+    private String server;
 
     @Override
     protected void setUp() throws Exception {
         super.setUp();
+        server = getMetastoreAuthority();
         setSystemProperty(SchemaService.WF_CONF_EXT_SCHEMAS, "wf-ext-schema.xsd");
         services = new Services();
         services.init();
         cleanUpDBTables();
         services.get(ActionService.class).register(ForTestingActionExecutor.class);
+
     }
 
     @Override
@@ -105,7 +115,7 @@ public class TestRecoveryService extends XDataTestCase {
         createTestCaseSubDir("lib");
         IOUtils.copyCharStream(reader, writer);
 
-        final DagEngine engine = new DagEngine(getTestUser(), "a");
+        final DagEngine engine = new DagEngine(getTestUser());
         Configuration conf = new XConfiguration();
         conf.set(OozieClient.APP_PATH, "file://" +  getTestCaseDir() + File.separator + "workflow.xml");
         conf.set(OozieClient.USER_NAME, getTestUser());
@@ -186,9 +196,9 @@ public class TestRecoveryService extends XDataTestCase {
         store3.commitTrx();
         store3.closeTrx();
     }
-    
+
     /**
-     * Tests functionality of the Recovery Service Runnable command. </p> Starts an action with USER_RETRY status. 
+     * Tests functionality of the Recovery Service Runnable command. </p> Starts an action with USER_RETRY status.
      * Runs the recovery runnable, and ensures the state changes to OK and the job completes successfully.
      *
      * @throws Exception
@@ -197,11 +207,11 @@ public class TestRecoveryService extends XDataTestCase {
         final JPAService jpaService = Services.get().get(JPAService.class);
         WorkflowJobBean job = this.addRecordToWfJobTable(WorkflowJob.Status.RUNNING, WorkflowInstance.Status.RUNNING);
         WorkflowActionBean action = this.addRecordToWfActionTable(job.getId(), "1", WorkflowAction.Status.USER_RETRY);
-        
+
         Runnable recoveryRunnable = new RecoveryRunnable(0, 60, 60);
         recoveryRunnable.run();
         sleep(3000);
-        
+
         final WorkflowActionGetJPAExecutor wfActionGetCmd = new WorkflowActionGetJPAExecutor(action.getId());
 
         waitFor(5000, new Predicate() {
@@ -231,9 +241,11 @@ public class TestRecoveryService extends XDataTestCase {
             }
         });
         assertTrue(launcherJob.isSuccessful());
-        assertTrue(LauncherMapper.hasIdSwap(launcherJob));
+        Map<String, String> actionData = LauncherMapperHelper.getActionData(getFileSystem(), context.getActionDir(),
+                conf);
+        assertTrue(LauncherMapperHelper.hasIdSwap(actionData));
     }
-    
+
 
     /**
      * Tests functionality of the Recovery Service Runnable command. </p> Insert a coordinator job with RUNNING and
@@ -245,7 +257,7 @@ public class TestRecoveryService extends XDataTestCase {
         final String jobId = "0000000-" + new Date().getTime() + "-testCoordRecoveryService-C";
         final int actionNum = 1;
         final String actionId = jobId + "@" + actionNum;
-        final CoordinatorEngine ce = new CoordinatorEngine(getTestUser(), "UNIT_TESTING");
+        final CoordinatorEngine ce = new CoordinatorEngine(getTestUser());
         CoordinatorStore store = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store.beginTrx();
         try {
@@ -294,11 +306,8 @@ public class TestRecoveryService extends XDataTestCase {
      */
     public void testCoordActionRecoveryServiceForWaiting() throws Exception {
 
-        String currentDatePlusMonth = XDataTestCase.getCurrentDateafterIncrementingInMonths(1);
-        Date startTime = DateUtils.parseDateOozieTZ(currentDatePlusMonth);
-        Date endTime = DateUtils.parseDateOozieTZ(currentDatePlusMonth);
         CoordinatorJobBean job = addRecordToCoordJobTableForWaiting("coord-job-for-action-input-check.xml",
-                CoordinatorJob.Status.RUNNING, startTime, endTime, false, true, 0);
+                CoordinatorJob.Status.RUNNING, false, true);
 
         CoordinatorActionBean action = addRecordToCoordActionTableForWaiting(job.getId(), 1,
                 CoordinatorAction.Status.WAITING, "coord-action-for-action-input-check.xml");
@@ -329,6 +338,76 @@ public class TestRecoveryService extends XDataTestCase {
         action = jpaService.execute(coordGetCmd);
         if (action.getStatus() == CoordinatorAction.Status.WAITING) {
             fail("recovery waiting coord action failed, action is WAITING");
+        }
+    }
+
+
+    public void testCoordActionRecoveryServiceForWaitingRegisterPartition() throws Exception {
+        services.destroy();
+        services = super.setupServicesForHCatalog();
+        services.getConf().set(URIHandlerService.URI_HANDLERS,
+                FSURIHandler.class.getName() + "," + HCatURIHandler.class.getName());
+        services.getConf().setLong(RecoveryService.CONF_PUSH_DEPENDENCY_INTERVAL, 1);
+        services.init();
+
+        String db = "default";
+        String table = "tablename";
+
+        // dep1 is not available and dep2 is available
+        String newHCatDependency1 = "hcat://" + server + "/" + db + "/" + table + "/dt=20120430;country=brazil";
+        String newHCatDependency2 = "hcat://" + server + "/" + db + "/" + table + "/dt=20120430;country=usa";
+        String newHCatDependency = newHCatDependency1 + CoordELFunctions.INSTANCE_SEPARATOR + newHCatDependency2;
+
+        HCatAccessorService hcatService = services.get(HCatAccessorService.class);
+        JMSAccessorService jmsService = services.get(JMSAccessorService.class);
+        PartitionDependencyManagerService pdms = services.get(PartitionDependencyManagerService.class);
+        assertFalse(jmsService.isListeningToTopic(hcatService.getJMSConnectionInfo(new URI(newHCatDependency1)), db
+                + "." + table));
+
+        populateTable(db, table);
+        String actionId = addInitRecords(newHCatDependency);
+        CoordinatorAction ca = checkCoordActionDependencies(actionId, newHCatDependency);
+        assertEquals(CoordinatorAction.Status.WAITING, ca.getStatus());
+        // Register the missing dependencies to PDMS assuming CoordPushDependencyCheckCommand did this.
+        pdms.addMissingDependency(new HCatURI(newHCatDependency1), actionId);
+        pdms.addMissingDependency(new HCatURI(newHCatDependency2), actionId);
+
+        sleep(2000);
+        Runnable recoveryRunnable = new RecoveryRunnable(0, 1, 1);
+        recoveryRunnable.run();
+        sleep(2000);
+
+        // Recovery service should have discovered newHCatDependency2 and JMS Connection should exist
+        // and newHCatDependency1 should be in PDMS waiting list
+        assertTrue(jmsService.isListeningToTopic(hcatService.getJMSConnectionInfo(new URI(newHCatDependency2)), "hcat."
+                + db + "." + table));
+        checkCoordActionDependencies(actionId, newHCatDependency1);
+
+        assertNull(pdms.getWaitingActions(new HCatURI(newHCatDependency2)));
+        Collection<String> waitingActions = pdms.getWaitingActions(new HCatURI(newHCatDependency1));
+        assertEquals(1, waitingActions.size());
+        assertTrue(waitingActions.contains(actionId));
+    }
+
+    private void populateTable(String db, String table) throws Exception {
+        dropTable(db, table, true);
+        dropDatabase(db, true);
+        createDatabase(db);
+        createTable(db, table, "dt,country");
+        addPartition(db, table, "dt=20120430;country=usa");
+        addPartition(db, table, "dt=20120412;country=brazil");
+        addPartition(db, table, "dt=20120413;country=brazil");
+    }
+
+    private CoordinatorActionBean checkCoordActionDependencies(String actionId, String expDeps) throws Exception {
+        try {
+            JPAService jpaService = Services.get().get(JPAService.class);
+            CoordinatorActionBean action = jpaService.execute(new CoordActionGetJPAExecutor(actionId));
+            assertEquals(expDeps, action.getPushMissingDependencies());
+            return action;
+        }
+        catch (JPAExecutorException se) {
+            throw new Exception("Action ID " + actionId + " was not stored properly in db");
         }
     }
 
@@ -441,29 +520,6 @@ public class TestRecoveryService extends XDataTestCase {
         assertEquals(WorkflowJob.Status.RUNNING, ret.getStatus());
     }
 
-    protected CoordinatorJobBean addRecordToCoordJobTableForWaiting(String testFileName, CoordinatorJob.Status status, Date start, Date end,
-            boolean pending, boolean doneMatd, int lastActionNum) throws Exception {
-
-        String testDir = getTestCaseDir();
-        CoordinatorJobBean coordJob = createCoordJob(testFileName, status, start, end, pending, doneMatd, lastActionNum);
-        String appXml = getCoordJobXmlForWaiting(testFileName, testDir);
-        coordJob.setJobXml(appXml);
-
-        try {
-            JPAService jpaService = Services.get().get(JPAService.class);
-            assertNotNull(jpaService);
-            CoordJobInsertJPAExecutor coordInsertCmd = new CoordJobInsertJPAExecutor(coordJob);
-            jpaService.execute(coordInsertCmd);
-        }
-        catch (JPAExecutorException je) {
-            je.printStackTrace();
-            fail("Unable to insert the test coord job record to table");
-            throw je;
-        }
-
-        return coordJob;
-    }
-
     protected CoordinatorActionBean addRecordToCoordActionTableForWaiting(String jobId, int actionNum,
             CoordinatorAction.Status status, String resourceXmlName) throws Exception {
         CoordinatorActionBean action = createCoordAction(jobId, actionNum, status, resourceXmlName, 0);
@@ -497,18 +553,6 @@ public class TestRecoveryService extends XDataTestCase {
         }
         catch (IOException ioe) {
             throw new RuntimeException(XLog.format("Could not get "+ resourceXmlName, ioe));
-        }
-    }
-
-    protected String getCoordJobXmlForWaiting(String testFileName, String testDir) {
-        try {
-            Reader reader = IOUtils.getResourceAsReader(testFileName, -1);
-            String appXml = IOUtils.getReaderAsString(reader, -1);
-            appXml = appXml.replaceAll("#testDir", testDir);
-            return appXml;
-        }
-        catch (IOException ioe) {
-            throw new RuntimeException(XLog.format("Could not get "+ testFileName, ioe));
         }
     }
 
@@ -630,7 +674,6 @@ public class TestRecoveryService extends XDataTestCase {
         coordJob.setLastModifiedTime(new Date());
         coordJob.setUser(getTestUser());
         coordJob.setGroup(getTestGroup());
-        coordJob.setAuthToken("notoken");
         coordJob.setTimeZone("UTC");
 
         String baseURI = baseDir + "/workflows";
@@ -677,8 +720,8 @@ public class TestRecoveryService extends XDataTestCase {
         appXml += "</coordinator-app>";
         coordJob.setJobXml(appXml);
         coordJob.setLastActionNumber(0);
-        coordJob.setFrequency(1);
-        coordJob.setExecution(Execution.FIFO);
+        coordJob.setFrequency("1");
+        coordJob.setExecutionOrder(Execution.FIFO);
         coordJob.setConcurrency(1);
         try {
             coordJob.setEndTime(DateUtils.parseDateOozieTZ("2009-02-03T23:59Z"));
@@ -699,7 +742,7 @@ public class TestRecoveryService extends XDataTestCase {
             throw se;
         }
     }
-    
+
     @Override
     protected WorkflowActionBean addRecordToWfActionTable(String wfId, String actionName, WorkflowAction.Status status)
             throws Exception {

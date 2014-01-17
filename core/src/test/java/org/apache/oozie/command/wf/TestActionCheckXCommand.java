@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +20,7 @@ package org.apache.oozie.command.wf;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.util.Date;
+import java.util.Map;
 
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -29,7 +30,7 @@ import org.apache.hadoop.mapred.JobID;
 import org.apache.hadoop.mapred.RunningJob;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
-import org.apache.oozie.action.hadoop.LauncherMapper;
+import org.apache.oozie.action.hadoop.LauncherMapperHelper;
 import org.apache.oozie.action.hadoop.MapReduceActionExecutor;
 import org.apache.oozie.action.hadoop.MapperReducerForTest;
 import org.apache.oozie.client.WorkflowAction;
@@ -188,7 +189,6 @@ public class TestActionCheckXCommand extends XDataTestCase {
         assertEquals(new Long(1), new Long(counterVal));
     }
 
-    @SuppressWarnings("deprecation")
     public void testActionCheck() throws Exception {
         JPAService jpaService = Services.get().get(JPAService.class);
         WorkflowJobBean job = this.addRecordToWfJobTable(WorkflowJob.Status.RUNNING, WorkflowInstance.Status.RUNNING);
@@ -202,7 +202,6 @@ public class TestActionCheckXCommand extends XDataTestCase {
         MapReduceActionExecutor actionExecutor = new MapReduceActionExecutor();
         JobConf conf = actionExecutor.createBaseHadoopConf(context, XmlUtils.parseXml(action.getConf()));
         String user = conf.get("user.name");
-        String group = conf.get("group.name");
         JobClient jobClient = Services.get().get(HadoopAccessorService.class).createJobClient(user, conf);
 
         String launcherId = action.getExternalId();
@@ -215,15 +214,18 @@ public class TestActionCheckXCommand extends XDataTestCase {
             }
         });
         assertTrue(launcherJob.isSuccessful());
-        assertTrue(LauncherMapper.hasIdSwap(launcherJob));
+        Map<String, String> actionData = LauncherMapperHelper.getActionData(getFileSystem(), context.getActionDir(),
+                conf);
+        assertTrue(LauncherMapperHelper.hasIdSwap(actionData));
 
         new ActionCheckXCommand(action.getId()).call();
         action = jpaService.execute(wfActionGetCmd);
         String mapperId = action.getExternalId();
+        String childId = action.getExternalChildIDs();
 
-        assertFalse(launcherId.equals(mapperId));
+        assertTrue(launcherId.equals(mapperId));
 
-        final RunningJob mrJob = jobClient.getJob(JobID.forName(mapperId));
+        final RunningJob mrJob = jobClient.getJob(JobID.forName(childId));
 
         waitFor(120 * 1000, new Predicate() {
             public boolean evaluate() throws Exception {
@@ -245,13 +247,12 @@ public class TestActionCheckXCommand extends XDataTestCase {
             return;
         }
         services.destroy();
-        // Make the ActionCheckXCommand run more frequently so the test won't take as long
-        setSystemProperty("oozie.service.ActionCheckerService.action.check.interval", "10");
-        setSystemProperty("oozie.service.ActionCheckerService.action.check.delay", "20");
         // Make the max number of retries lower so the test won't take as long
         final int maxRetries = 2;
         setSystemProperty("oozie.action.retries.max", Integer.toString(maxRetries));
         services = new Services();
+        // Disable ActionCheckerService so it doesn't interfere by triggering any extra ActionCheckXCommands
+        setClassesToBeExcluded(services.getConf(), new String[]{"org.apache.oozie.service.ActionCheckerService"});
         services.init();
 
         final JPAService jpaService = Services.get().get(JPAService.class);
@@ -325,15 +326,18 @@ public class TestActionCheckXCommand extends XDataTestCase {
             }
         });
         assertTrue(launcherJob.isSuccessful());
-        assertTrue(LauncherMapper.hasIdSwap(launcherJob));
+        Map<String, String> actionData = LauncherMapperHelper.getActionData(getFileSystem(), context.getActionDir(),
+                conf);
+        assertTrue(LauncherMapperHelper.hasIdSwap(actionData));
 
         new ActionCheckXCommand(actionId).call();
         WorkflowActionBean action4 = jpaService.execute(wfActionGetCmd);
         String mapperId = action4.getExternalId();
+        String childId = action4.getExternalChildIDs();
 
-        assertFalse(launcherId.equals(mapperId));
+        assertTrue(launcherId.equals(mapperId));
 
-        final RunningJob mrJob = jobClient.getJob(JobID.forName(mapperId));
+        final RunningJob mrJob = jobClient.getJob(JobID.forName(childId));
 
         waitFor(120 * 1000, new Predicate() {
             @Override
@@ -355,13 +359,12 @@ public class TestActionCheckXCommand extends XDataTestCase {
             return;
         }
         services.destroy();
-        // Make the ActionCheckXCommand run more frequently so the test won't take as long
-        setSystemProperty("oozie.service.ActionCheckerService.action.check.interval", "10");
-        setSystemProperty("oozie.service.ActionCheckerService.action.check.delay", "20");
         // Make the max number of retries lower so the test won't take as long
         final int maxRetries = 2;
         setSystemProperty("oozie.action.retries.max", Integer.toString(maxRetries));
         services = new Services();
+        // Disable ActionCheckerService so it doesn't interfere by triggering any extra ActionCheckXCommands
+        setClassesToBeExcluded(services.getConf(), new String[]{"org.apache.oozie.service.ActionCheckerService"});
         services.init();
 
         final JPAService jpaService = Services.get().get(JPAService.class);
@@ -390,11 +393,13 @@ public class TestActionCheckXCommand extends XDataTestCase {
             }
         });
         assertTrue(launcherJob.isSuccessful());
-        assertTrue(LauncherMapper.hasIdSwap(launcherJob));
+        Map<String, String> actionData = LauncherMapperHelper.getActionData(getFileSystem(), context.getActionDir(),
+                conf);
+        assertTrue(LauncherMapperHelper.hasIdSwap(actionData));
 
         new ActionCheckXCommand(action1.getId()).call();
         WorkflowActionBean action2 = jpaService.execute(wfActionGetCmd);
-        String originalMapperId = action2.getExternalId();
+        String originalMapperId = action2.getExternalChildIDs();
 
         assertFalse(originalLauncherId.equals(originalMapperId));
 
@@ -444,7 +449,6 @@ public class TestActionCheckXCommand extends XDataTestCase {
         String launcherId = action3.getExternalId();
 
         assertFalse(originalLauncherId.equals(launcherId));
-        assertFalse(originalMapperId.equals(launcherId));
 
         final RunningJob launcherJob2 = jobClient.getJob(JobID.forName(launcherId));
 
@@ -454,15 +458,16 @@ public class TestActionCheckXCommand extends XDataTestCase {
                 return launcherJob2.isComplete();
             }
         });
+
         assertTrue(launcherJob2.isSuccessful());
-        assertTrue(LauncherMapper.hasIdSwap(launcherJob2));
+        actionData = LauncherMapperHelper.getActionData(getFileSystem(), context.getActionDir(),
+                conf);
+        assertTrue(LauncherMapperHelper.hasIdSwap(actionData));
 
         new ActionCheckXCommand(actionId).call();
         WorkflowActionBean action4 = jpaService.execute(wfActionGetCmd);
-        String mapperId = action4.getExternalId();
+        String mapperId = action4.getExternalChildIDs();
         assertFalse(originalMapperId.equals(mapperId));
-
-        assertFalse(launcherId.equals(mapperId));
 
         final RunningJob mrJob = jobClient.getJob(JobID.forName(mapperId));
 

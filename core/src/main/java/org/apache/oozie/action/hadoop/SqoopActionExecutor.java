@@ -19,14 +19,11 @@ package org.apache.oozie.action.hadoop;
 
 import java.io.IOException;
 import java.io.StringReader;
-import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Properties;
 import java.util.StringTokenizer;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapred.Counters;
 import org.apache.hadoop.mapred.JobClient;
@@ -35,7 +32,6 @@ import org.apache.hadoop.mapred.JobID;
 import org.apache.hadoop.mapred.RunningJob;
 import org.apache.oozie.action.ActionExecutorException;
 import org.apache.oozie.client.WorkflowAction;
-import org.apache.oozie.service.HadoopAccessorException;
 import org.apache.oozie.util.XConfiguration;
 import org.apache.oozie.util.XmlUtils;
 import org.apache.oozie.util.XLog;
@@ -46,24 +42,28 @@ import org.jdom.Namespace;
 public class SqoopActionExecutor extends JavaActionExecutor {
 
   public static final String OOZIE_ACTION_EXTERNAL_STATS_WRITE = "oozie.action.external.stats.write";
+  private static final String SQOOP_MAIN_CLASS_NAME = "org.apache.oozie.action.hadoop.SqoopMain";
+  static final String SQOOP_ARGS = "oozie.sqoop.args";
 
     public SqoopActionExecutor() {
         super("sqoop");
     }
 
     @Override
-    protected List<Class> getLauncherClasses() {
-        List<Class> classes = super.getLauncherClasses();
-        classes.add(LauncherMain.class);
-        classes.add(MapReduceMain.class);
-        classes.add(HiveMain.class);
-        classes.add(SqoopMain.class);
+    public List<Class> getLauncherClasses() {
+        List<Class> classes = new ArrayList<Class>();
+        try {
+            classes.add(Class.forName(SQOOP_MAIN_CLASS_NAME));
+        }
+        catch (ClassNotFoundException e) {
+            throw new RuntimeException("Class not found", e);
+        }
         return classes;
     }
 
     @Override
     protected String getLauncherMain(Configuration launcherConf, Element actionXml) {
-        return launcherConf.get(LauncherMapper.CONF_OOZIE_ACTION_MAIN_CLASS, SqoopMain.class.getName());
+        return launcherConf.get(LauncherMapper.CONF_OOZIE_ACTION_MAIN_CLASS, SQOOP_MAIN_CLASS_NAME);
     }
 
     @Override
@@ -103,8 +103,12 @@ public class SqoopActionExecutor extends JavaActionExecutor {
             }
         }
 
-        SqoopMain.setSqoopCommand(actionConf, args);
+        setSqoopCommand(actionConf, args);
         return actionConf;
+    }
+
+    private void setSqoopCommand(Configuration conf, String[] args) {
+        MapReduceMain.setStrings(conf, SQOOP_ARGS, args);
     }
 
     /**
@@ -132,26 +136,29 @@ public class SqoopActionExecutor extends JavaActionExecutor {
                 // Cumulative counters for all Sqoop mapreduce jobs
                 Counters counters = null;
 
+                // Sqoop do not have to create mapreduce job each time
                 String externalIds = action.getExternalChildIDs();
-                String []jobIds = externalIds.split(",");
+                if (externalIds != null && !externalIds.trim().isEmpty()) {
+                    String []jobIds = externalIds.split(",");
 
-                for(String jobId : jobIds) {
-                    RunningJob runningJob = jobClient.getJob(JobID.forName(jobId));
-                    if (runningJob == null) {
-                      throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED, "SQOOP001",
-                        "Unknown hadoop job [{0}] associated with action [{1}].  Failing this action!", action
-                        .getExternalId(), action.getId());
-                    }
-
-                    Counters taskCounters = runningJob.getCounters();
-                    if(taskCounters != null) {
-                        if(counters == null) {
-                          counters = taskCounters;
-                        } else {
-                          counters.incrAllCounters(taskCounters);
+                    for(String jobId : jobIds) {
+                        RunningJob runningJob = jobClient.getJob(JobID.forName(jobId));
+                        if (runningJob == null) {
+                          throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED, "SQOOP001",
+                            "Unknown hadoop job [{0}] associated with action [{1}].  Failing this action!", action
+                            .getExternalId(), action.getId());
                         }
-                    } else {
-                      XLog.getLog(getClass()).warn("Could not find Hadoop Counters for job: [{0}]", jobId);
+
+                        Counters taskCounters = runningJob.getCounters();
+                        if(taskCounters != null) {
+                            if(counters == null) {
+                              counters = taskCounters;
+                            } else {
+                              counters.incrAllCounters(taskCounters);
+                            }
+                        } else {
+                          XLog.getLog(getClass()).warn("Could not find Hadoop Counters for job: [{0}]", jobId);
+                        }
                     }
                 }
 
@@ -216,27 +223,6 @@ public class SqoopActionExecutor extends JavaActionExecutor {
         catch (IOException ex) {
             throw convertException(ex);
         }
-    }
-
-    /**
-     * Get the stats and external child IDs
-     *
-     * @param actionFs the FileSystem object
-     * @param runningJob the runningJob
-     * @param action the Workflow action
-     * @param context executor context
-     *
-     */
-    @Override
-    protected void getActionData(FileSystem actionFs, RunningJob runningJob, WorkflowAction action, Context context)
-            throws HadoopAccessorException, JDOMException, IOException, URISyntaxException{
-        super.getActionData(actionFs, runningJob, action, context);
-
-        // Load stored Hadoop jobs ids and promote them as external child ids
-        action.getData();
-        Properties props = new Properties();
-        props.load(new StringReader(action.getData()));
-        context.setExternalChildIDs((String)props.get(LauncherMain.HADOOP_JOBS));
     }
 
     @Override

@@ -45,8 +45,9 @@ import org.apache.oozie.coord.CoordELFunctions;
 import org.apache.oozie.executor.jpa.CoordActionGetJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobGetJPAExecutor;
 import org.apache.oozie.executor.jpa.CoordJobInsertJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordJobUpdateJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
+import org.apache.oozie.executor.jpa.CoordJobQueryExecutor.CoordJobQuery;
 import org.apache.oozie.local.LocalOozie;
 import org.apache.oozie.service.JPAService;
 import org.apache.oozie.service.SchemaService;
@@ -115,7 +116,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         store1.closeTrx();
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_ACTION, Integer.toString(actionNum), false, true);
+        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_ACTION, Integer.toString(actionNum), false, true);
 
         CoordinatorStore store2 = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store2.beginTrx();
@@ -157,7 +158,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         String rerunScope = Integer.toString(actionNum1) + "-" + Integer.toString(actionNum2);
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_ACTION, rerunScope, false, true);
+        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_ACTION, rerunScope, false, true);
 
         CoordinatorStore store1 = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store1.beginTrx();
@@ -200,7 +201,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         String rerunScope = Integer.toString(actionNum1) + "," + Integer.toString(actionNum2);
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_ACTION, rerunScope, false, true);
+        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_ACTION, rerunScope, false, true);
 
         CoordinatorStore store1 = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store1.beginTrx();
@@ -244,7 +245,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         String rerunScope = "1-3";
         try {
             final OozieClient coordClient = LocalOozie.getCoordClient();
-            coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_ACTION, rerunScope, false, true);
+            coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_ACTION, rerunScope, false, true);
             fail("Exception expected because one action is missing from db.");
         }
         catch (OozieClientException ex) {
@@ -278,7 +279,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
 
         try {
             final OozieClient coordClient = LocalOozie.getCoordClient();
-            coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_ACTION, Integer.toString(actionNum), false,
+            coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_ACTION, Integer.toString(actionNum), false,
                     true);
             fail("Exception expected because action is not in terminal state.");
         }
@@ -329,7 +330,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         store1.closeTrx();
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_DATE, "2009-12-15T01:00Z", false, true);
+        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_DATE, "2009-12-15T01:00Z", false, true);
 
         CoordinatorStore store2 = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store2.beginTrx();
@@ -371,7 +372,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         String rerunScope = "2009-12-15T01:00Z" + "::" + "2009-12-16T01:00Z";
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_DATE, rerunScope, false, true);
+        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_DATE, rerunScope, false, true);
 
         CoordinatorStore store1 = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store1.beginTrx();
@@ -415,7 +416,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         String rerunScope = "2009-12-15T01:00Z" + "," + "2009-12-16T01:00Z";
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_DATE, rerunScope, false, true);
+        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_DATE, rerunScope, false, true);
 
         CoordinatorStore store1 = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store1.beginTrx();
@@ -460,7 +461,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         String rerunScope = "2009-12-15T01:00Z" + "::" + "2009-12-17T01:00Z";
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_DATE, rerunScope, false, true);
+        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_DATE, rerunScope, false, true);
 
         CoordinatorStore store1 = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store1.beginTrx();
@@ -504,7 +505,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         String rerunScope = "2009-12-15T01:00Z,2009-12-16T01:00Z,2009-12-17T01:00Z";
         try {
             final OozieClient coordClient = LocalOozie.getCoordClient();
-            coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_DATE, rerunScope, false, true);
+            coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_DATE, rerunScope, false, true);
             fail("Exception expected because one action is missing from db.");
         }
         catch (OozieClientException ex) {
@@ -543,7 +544,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         fs.create(new Path(inputDir, "_SUCCESS"), true);
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_ACTION, Integer.toString(actionNum), true, true);
+        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_ACTION, Integer.toString(actionNum), true, true);
 
         CoordinatorStore store2 = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store2.beginTrx();
@@ -613,7 +614,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         assertTrue(fs.exists(success));
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_ACTION, Integer.toString(actionNum), false, false);
+        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_ACTION, Integer.toString(actionNum), false, false);
 
         CoordinatorStore store2 = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store2.beginTrx();
@@ -660,7 +661,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         }
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_ACTION, Integer.toString(actionNum), false, false);
+        coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_ACTION, Integer.toString(actionNum), false, false);
         CoordinatorStore store2 = Services.get().get(StoreService.class).getStore(CoordinatorStore.class);
         store2.beginTrx();
         CoordinatorActionBean action2 = store2.getCoordinatorAction(actionId, false);
@@ -694,7 +695,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         assertEquals(Job.Status.FAILED, job.getStatus());
 
         try {
-            new CoordRerunXCommand(job.getId(), RestConstants.JOB_COORD_RERUN_DATE, "2009-12-15T01:00Z", false, true)
+            new CoordRerunXCommand(job.getId(), RestConstants.JOB_COORD_SCOPE_DATE, "2009-12-15T01:00Z", false, true)
                     .call();
             fail("Coordinator job is FAILED, rerun should throw exception");
         }
@@ -722,7 +723,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         job = jpaService.execute(coordJobGetExecutor);
         assertEquals(Job.Status.DONEWITHERROR, job.getStatus());
 
-        new CoordRerunXCommand(job.getId(), RestConstants.JOB_COORD_RERUN_DATE, "2009-12-15T01:00Z", false, true)
+        new CoordRerunXCommand(job.getId(), RestConstants.JOB_COORD_SCOPE_DATE, "2009-12-15T01:00Z", false, true)
                 .call();
         job = jpaService.execute(coordJobGetExecutor);
         assertEquals(Job.Status.RUNNINGWITHERROR, job.getStatus());
@@ -745,7 +746,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         job = jpaService.execute(coordJobGetExecutor);
         assertEquals(Job.Status.PAUSED, job.getStatus());
 
-        new CoordRerunXCommand(job.getId(), RestConstants.JOB_COORD_RERUN_DATE, "2009-12-15T01:00Z", false, true)
+        new CoordRerunXCommand(job.getId(), RestConstants.JOB_COORD_SCOPE_DATE, "2009-12-15T01:00Z", false, true)
                 .call();
 
         job = jpaService.execute(coordJobGetExecutor);
@@ -770,7 +771,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         job = jpaService.execute(coordJobGetExecutor);
         assertEquals(Job.Status.PAUSEDWITHERROR, job.getStatus());
 
-        new CoordRerunXCommand(job.getId(), RestConstants.JOB_COORD_RERUN_DATE, "2009-12-15T01:00Z", false, true)
+        new CoordRerunXCommand(job.getId(), RestConstants.JOB_COORD_SCOPE_DATE, "2009-12-15T01:00Z", false, true)
                 .call();
 
         job = jpaService.execute(coordJobGetExecutor);
@@ -805,7 +806,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
 
         try {
             final OozieClient coordClient = LocalOozie.getCoordClient();
-            coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_RERUN_ACTION, Integer.toString(actionNum), false,
+            coordClient.reRunCoord(jobId, RestConstants.JOB_COORD_SCOPE_ACTION, Integer.toString(actionNum), false,
                     true);
             fail("Exception expected because action is not in terminal state.");
         }
@@ -845,7 +846,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         final JPAService jpaService = Services.get().get(JPAService.class);
         assertNotNull(jpaService);
         coordJob.setAppNamespace(SchemaService.COORDINATOR_NAMESPACE_URI_1);
-        jpaService.execute(new CoordJobUpdateJPAExecutor(coordJob));
+        CoordJobQueryExecutor.getInstance().executeUpdate(CoordJobQuery.UPDATE_COORD_JOB_APPNAMESPACE, coordJob);
 
         CoordinatorActionBean action1 = addRecordToCoordActionTable(coordJob.getId(), 1,
                 CoordinatorAction.Status.FAILED, "coord-rerun-action1.xml", 0);
@@ -857,7 +858,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         String rerunScope = Integer.toString(1) + "-" + Integer.toString(2);
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(coordJob.getId(), RestConstants.JOB_COORD_RERUN_ACTION, rerunScope, false, true);
+        coordClient.reRunCoord(coordJob.getId(), RestConstants.JOB_COORD_SCOPE_ACTION, rerunScope, false, true);
 
         CoordJobGetJPAExecutor coordJobGetCmd = new CoordJobGetJPAExecutor(coordJob.getId());
         coordJob = jpaService.execute(coordJobGetCmd);
@@ -894,7 +895,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         final JPAService jpaService = Services.get().get(JPAService.class);
         assertNotNull(jpaService);
         coordJob.setAppNamespace(SchemaService.COORDINATOR_NAMESPACE_URI_1);
-        jpaService.execute(new CoordJobUpdateJPAExecutor(coordJob));
+        CoordJobQueryExecutor.getInstance().executeUpdate(CoordJobQuery.UPDATE_COORD_JOB_APPNAMESPACE, coordJob);
 
         CoordinatorActionBean action1 = addRecordToCoordActionTable(coordJob.getId(), 1,
                 CoordinatorAction.Status.FAILED, "coord-rerun-action1.xml", 0);
@@ -906,7 +907,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         String rerunScope = Integer.toString(1) + "-" + Integer.toString(2);
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(coordJob.getId(), RestConstants.JOB_COORD_RERUN_ACTION, rerunScope, false, true);
+        coordClient.reRunCoord(coordJob.getId(), RestConstants.JOB_COORD_SCOPE_ACTION, rerunScope, false, true);
 
         CoordJobGetJPAExecutor coordJobGetCmd = new CoordJobGetJPAExecutor(coordJob.getId());
         coordJob = jpaService.execute(coordJobGetCmd);
@@ -944,7 +945,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         final JPAService jpaService = Services.get().get(JPAService.class);
         assertNotNull(jpaService);
         coordJob.setAppNamespace(SchemaService.COORDINATOR_NAMESPACE_URI_1);
-        jpaService.execute(new CoordJobUpdateJPAExecutor(coordJob));
+        CoordJobQueryExecutor.getInstance().executeUpdate(CoordJobQuery.UPDATE_COORD_JOB_APPNAMESPACE, coordJob);
 
         CoordinatorActionBean action1 = addRecordToCoordActionTable(coordJob.getId(), 1,
                 CoordinatorAction.Status.SUCCEEDED, "coord-rerun-action1.xml", 0);
@@ -956,7 +957,7 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         String rerunScope = Integer.toString(1) + "-" + Integer.toString(2);
 
         final OozieClient coordClient = LocalOozie.getCoordClient();
-        coordClient.reRunCoord(coordJob.getId(), RestConstants.JOB_COORD_RERUN_ACTION, rerunScope, false, true);
+        coordClient.reRunCoord(coordJob.getId(), RestConstants.JOB_COORD_SCOPE_ACTION, rerunScope, false, true);
 
         CoordJobGetJPAExecutor coordJobGetCmd = new CoordJobGetJPAExecutor(coordJob.getId());
         coordJob = jpaService.execute(coordJobGetCmd);
@@ -1012,7 +1013,6 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         coordJob.setLastModifiedTime(new Date());
         coordJob.setUser(getTestUser());
         coordJob.setGroup(getTestGroup());
-        coordJob.setAuthToken("notoken");
 
         Properties conf = getCoordProp(appPath);
         String confStr = XmlUtils.writePropToString(conf);
@@ -1020,8 +1020,8 @@ public class TestCoordRerunXCommand extends XDataTestCase {
         coordJob.setConf(confStr);
         coordJob.setJobXml(appXml);
         coordJob.setLastActionNumber(0);
-        coordJob.setFrequency(1);
-        coordJob.setExecution(Execution.FIFO);
+        coordJob.setFrequency("1");
+        coordJob.setExecutionOrder(Execution.FIFO);
         coordJob.setConcurrency(1);
         try {
             coordJob.setStartTime(DateUtils.parseDateOozieTZ("2009-12-15T01:00Z"));
