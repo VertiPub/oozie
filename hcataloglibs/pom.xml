@@ -32,7 +32,6 @@
     <packaging>pom</packaging>
 
     <modules>
-        <module>hcatalog-0.5</module>
         <module>hive-hcatalog-0.13.0</module>
     </modules>
 
