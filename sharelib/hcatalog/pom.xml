@@ -49,10 +49,6 @@
                 </exclusion>
                 <exclusion>
                     <groupId>org.apache.hive</groupId>
-                    <artifactId>hive-builtins</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.hive</groupId>
                     <artifactId>hive-shims</artifactId>
                 </exclusion>
                 <exclusion>

@@ -99,10 +99,6 @@
                     <artifactId>hive-cli</artifactId>
                 </exclusion>
                 <exclusion>
-                    <groupId>org.apache.hive</groupId>
-                    <artifactId>hive-builtins</artifactId>
-                </exclusion>
-                <exclusion>
                     <groupId>jline</groupId>
                     <artifactId>jline</artifactId>
                 </exclusion>
